@@ -8,13 +8,24 @@ from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
 import logging
 import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load .env file only for local development; in production (e.g. Render),
+# environment variables are already set and load_dotenv() is not needed.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Read and log API key status so it is easy to diagnose configuration issues
+_api_key = os.environ.get("OPENAI_API_KEY")
+if _api_key:
+    logger.info("OPENAI_API_KEY loaded successfully")
+else:
+    logger.warning("OPENAI_API_KEY not found in environment variables - chat will use template responses")
 
 app = FastAPI(
     title="Genshin AI Coach",
@@ -31,9 +42,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services
+# Initialize services, passing the API key explicitly so it is always sourced
+# from os.environ regardless of how load_dotenv behaves in the environment.
 enka_service = EnkaService()
-chat_interface = ChatInterface()
+chat_interface = ChatInterface(api_key=_api_key)
 
 # Request models
 class ChatRequest(BaseModel):
