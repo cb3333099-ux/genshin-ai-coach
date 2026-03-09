@@ -12,6 +12,30 @@ class EnkaService:
     BASE_URL = "https://enka.network/api/uid"
     CACHE_DURATION = 3600  # Cache player data for 1 hour
 
+    # Mapping from Enka fight prop IDs to human-readable stat names.
+    # Used for both main-stat and substat labels in artifact parsing.
+    PROP_ID_TO_STAT: Dict[str, str] = {
+        "FIGHT_PROP_HP":                    "HP",
+        "FIGHT_PROP_HP_PERCENT":            "HP%",
+        "FIGHT_PROP_ATTACK":                "ATK",
+        "FIGHT_PROP_ATTACK_PERCENT":        "ATK%",
+        "FIGHT_PROP_DEFENSE":               "DEF",
+        "FIGHT_PROP_DEFENSE_PERCENT":       "DEF%",
+        "FIGHT_PROP_ELEMENT_MASTERY":       "Elemental Mastery",
+        "FIGHT_PROP_CHARGE_EFFICIENCY":     "Energy Recharge",
+        "FIGHT_PROP_CRITICAL":              "Crit Rate",
+        "FIGHT_PROP_CRITICAL_HURT":         "Crit DMG",
+        "FIGHT_PROP_HEAL_ADD":              "Healing Bonus",
+        "FIGHT_PROP_FIRE_ADD_HURT":         "Pyro DMG Bonus",
+        "FIGHT_PROP_WATER_ADD_HURT":        "Hydro DMG Bonus",
+        "FIGHT_PROP_ICE_ADD_HURT":          "Cryo DMG Bonus",
+        "FIGHT_PROP_ELEC_ADD_HURT":         "Electro DMG Bonus",
+        "FIGHT_PROP_WIND_ADD_HURT":         "Anemo DMG Bonus",
+        "FIGHT_PROP_ROCK_ADD_HURT":         "Geo DMG Bonus",
+        "FIGHT_PROP_GRASS_ADD_HURT":        "Dendro DMG Bonus",
+        "FIGHT_PROP_PHYSICAL_ADD_HURT":     "Physical DMG Bonus",
+    }
+
     # Enka Network character database (community-maintained, updated with each patch)
     ENKA_CHARACTERS_URL = (
         "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/characters.json"
@@ -173,6 +197,14 @@ class EnkaService:
     def _normalize_name(name: str) -> str:
         """Normalise a character name for cross-source matching (lowercase, no separators)."""
         return name.lower().replace(" ", "").replace("'", "").replace("-", "").replace(".", "")
+
+    @staticmethod
+    def _prop_id_to_stat_name(prop_id: str) -> str:
+        """Convert an Enka fight-prop ID to a human-readable stat name."""
+        if prop_id in EnkaService.PROP_ID_TO_STAT:
+            return EnkaService.PROP_ID_TO_STAT[prop_id]
+        # Graceful fallback: strip prefix and title-case
+        return prop_id.replace("FIGHT_PROP_", "").replace("_", " ").title()
 
     def _get_char_name(self, character_id: Optional[int]) -> str:
         info = EnkaService._character_db.get(character_id) if character_id else None
@@ -464,22 +496,30 @@ class EnkaService:
             elif item_type == "ITEM_RELIQUARY":
                 main_stat = flat.get("reliquaryMainstat", {})
                 sub_stats = flat.get("reliquarySubstats", [])
+                main_stat_name = self._prop_id_to_stat_name(main_stat.get("mainPropId", ""))
+                # Parse each substat into a structured dict with human-readable name
+                parsed_substats = [
+                    {
+                        "name": self._prop_id_to_stat_name(s.get("appendPropId", "")),
+                        "value": s.get("statValue", 0.0),
+                    }
+                    for s in sub_stats
+                ]
                 artifacts.append({
                     "slot": flat.get("equipType", "").replace("EQUIP_", "").title(),
                     "set_name": flat.get("setNameTextMapHash", ""),
                     "icon": flat.get("icon", ""),
                     "rarity": flat.get("rankLevel"),
                     "level": equip.get("reliquary", {}).get("level", 1) - 1,
-                    "main_stat": main_stat.get("mainPropId", "").replace("FIGHT_PROP_", "").replace("_", " ").title(),
+                    # Backward-compatible main_stat label (kept for existing callers)
+                    "main_stat": main_stat_name,
+                    # New extended fields for optimizer
                     "main_stat_value": main_stat.get("statValue", 0.0),
-                    "substats": [
-                        {
-                            "name": s.get("appendPropId", "").replace("FIGHT_PROP_", "").replace("_", " ").title(),
-                            "value": s.get("statValue", 0.0),
-                        }
-                        for s in sub_stats
-                    ],
+                    "substats": parsed_substats,
+                    # Legacy field for backward compatibility
                     "sub_stat_count": len(sub_stats),
+                    # Additional fields
+                    "set_name_hash": flat.get("setNameTextMapHash", ""),
                 })
 
         # Parse talent/skill levels from skillLevelMap
