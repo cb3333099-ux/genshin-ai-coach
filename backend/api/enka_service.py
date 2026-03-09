@@ -466,9 +466,19 @@ class EnkaService:
                 sub_stats = flat.get("reliquarySubstats", [])
                 artifacts.append({
                     "slot": flat.get("equipType", "").replace("EQUIP_", "").title(),
+                    "set_name": flat.get("setNameTextMapHash", ""),
+                    "icon": flat.get("icon", ""),
                     "rarity": flat.get("rankLevel"),
                     "level": equip.get("reliquary", {}).get("level", 1) - 1,
                     "main_stat": main_stat.get("mainPropId", "").replace("FIGHT_PROP_", "").replace("_", " ").title(),
+                    "main_stat_value": main_stat.get("statValue", 0.0),
+                    "substats": [
+                        {
+                            "name": s.get("appendPropId", "").replace("FIGHT_PROP_", "").replace("_", " ").title(),
+                            "value": s.get("statValue", 0.0),
+                        }
+                        for s in sub_stats
+                    ],
                     "sub_stat_count": len(sub_stats),
                 })
 
