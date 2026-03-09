@@ -64,6 +64,7 @@ async def get_account(uid: str):
         return {
             "success": True,
             "data": account_data,
+            "character_count": len(account_data.get("characters", [])),
             "timestamp": datetime.now().isoformat()
         }
     except ValueError as e:

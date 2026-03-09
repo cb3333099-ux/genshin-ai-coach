@@ -5,10 +5,23 @@
 const API_BASE = 'https://genshin-ai-coach.onrender.com';
 
 /* ---------- DOM refs ---------- */
-const chatMessages = document.getElementById('chatMessages');
-const chatInput    = document.getElementById('chatInput');
-const sendBtn      = document.getElementById('sendBtn');
-const uidInput     = document.getElementById('uidInput');
+const chatMessages  = document.getElementById('chatMessages');
+const chatInput     = document.getElementById('chatInput');
+const sendBtn       = document.getElementById('sendBtn');
+const uidInput      = document.getElementById('uidInput');
+const accountPanel  = document.getElementById('accountPanel');
+const accountContent = document.getElementById('accountContent');
+const accountLoading = document.getElementById('accountLoading');
+
+/* ---------- Element emoji map ---------- */
+const ELEMENT_EMOJI = {
+    Pyro: '🔥', Hydro: '💧', Anemo: '🌀', Electro: '⚡',
+    Dendro: '🌿', Cryo: '❄️', Geo: '🪨', Unknown: '✨',
+};
+const ELEMENT_CLASS = {
+    Pyro: 'el-pyro', Hydro: 'el-hydro', Anemo: 'el-anemo', Electro: 'el-electro',
+    Dendro: 'el-dendro', Cryo: 'el-cryo', Geo: 'el-geo', Unknown: '',
+};
 
 /* ---------- Particles ---------- */
 (function spawnParticles() {
@@ -204,6 +217,143 @@ chatInput.addEventListener('keydown', e => {
 
 /* ---------- Send button ---------- */
 sendBtn.addEventListener('click', sendMessage);
+
+/* ---------- Account Info Fetch & Display ---------- */
+let accountFetchTimer = null;
+
+async function fetchAndDisplayAccount(uid) {
+    if (!uid || uid.length < 6) return;
+
+    accountPanel.style.display = 'block';
+    accountLoading.style.display = 'inline';
+    accountContent.innerHTML = '<div class="account-loading-msg">Fetching account data…</div>';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/account/${encodeURIComponent(uid)}`);
+        const json = await res.json();
+
+        if (!res.ok) {
+            const detail = json.detail || 'Unknown error';
+            accountContent.innerHTML = `<div class="account-error">⚠️ ${escapeHtml(detail)}</div>`;
+            showToast('Could not load account data', 'error');
+            return;
+        }
+
+        if (json.success && json.data) {
+            renderAccountPanel(json.data);
+            showToast(`✅ Loaded account: ${json.data.nickname || uid}`, 'success');
+        }
+    } catch (err) {
+        console.error('Account fetch error:', err);
+        accountContent.innerHTML = '<div class="account-error">🔌 Could not reach server. Try again later.</div>';
+        showToast('Server unreachable', 'error');
+    } finally {
+        accountLoading.style.display = 'none';
+    }
+}
+
+function renderAccountPanel(data) {
+    const nickname = data.nickname || 'Traveler';
+    const level    = data.level    || '?';
+    const wl       = data.world_level != null ? data.world_level : '?';
+    const abyssStr = data.abyss_floor
+        ? `Floor ${data.abyss_floor}-${data.abyss_chamber}`
+        : '—';
+    const sig = data.signature ? `<div class="account-sig">"${escapeHtml(data.signature)}"</div>` : '';
+
+    let html = `
+        <div class="account-header">
+            <div class="account-name">${escapeHtml(nickname)}</div>
+            <div class="account-meta">AR ${level} &nbsp;·&nbsp; WL ${wl} &nbsp;·&nbsp; Abyss ${abyssStr}</div>
+            ${sig}
+        </div>`;
+
+    const characters = data.characters || [];
+    if (characters.length > 0) {
+        html += `<div class="char-list">`;
+        for (const char of characters) {
+            const elem      = char.element || 'Unknown';
+            const emoji     = ELEMENT_EMOJI[elem]  || '✨';
+            const cls       = ELEMENT_CLASS[elem]  || '';
+            const name      = escapeHtml(char.name  || 'Unknown');
+            const lvl       = char.level            || 1;
+            const cons      = char.constellations   != null ? char.constellations : '?';
+            const na        = char.talents?.normal_attack   ?? '?';
+            const skill     = char.talents?.elemental_skill ?? '?';
+            const burst     = char.talents?.elemental_burst ?? '?';
+
+            const stats  = char.stats  || {};
+            const cr     = stats['Crit Rate']  || '—';
+            const cd     = stats['Crit DMG']   || '—';
+            const er     = stats['Energy Recharge'] || '—';
+            const em     = stats['Elemental Mastery'] != null ? stats['Elemental Mastery'] : '—';
+
+            const weapon = char.weapon || {};
+            const wLvl   = weapon.level ? `Lv.${weapon.level}` : '';
+            const wRef   = weapon.refinement ? `R${weapon.refinement}` : '';
+            const wRar   = weapon.rarity ? `${weapon.rarity}★` : '';
+            const weaponStr = [wRar, wLvl, wRef].filter(Boolean).join(' ');
+
+            const artifacts = char.artifacts || [];
+            const bestArti  = artifacts.length
+                ? `${artifacts.length} pieces · +${Math.max(...artifacts.map(a => a.level || 0))}`
+                : '';
+
+            html += `
+            <div class="char-card">
+                <div class="char-card-top">
+                    <span class="char-elem-badge ${cls}">${emoji}</span>
+                    <div class="char-info">
+                        <div class="char-name">${name}</div>
+                        <div class="char-sub">Lv.${lvl} &nbsp;·&nbsp; C${cons}</div>
+                    </div>
+                </div>
+                <div class="char-details">
+                    <div class="char-detail-row"><span class="cd-label">Talents</span><span class="cd-val">${na} / ${skill} / ${burst}</span></div>
+                    ${weaponStr ? `<div class="char-detail-row"><span class="cd-label">Weapon</span><span class="cd-val">${weaponStr}</span></div>` : ''}
+                    <div class="char-detail-row"><span class="cd-label">CR / CD</span><span class="cd-val">${cr} / ${cd}</span></div>
+                    <div class="char-detail-row"><span class="cd-label">ER</span><span class="cd-val">${er}</span></div>
+                    ${em !== '—' ? `<div class="char-detail-row"><span class="cd-label">EM</span><span class="cd-val">${em}</span></div>` : ''}
+                    ${bestArti ? `<div class="char-detail-row"><span class="cd-label">Artifacts</span><span class="cd-val">${bestArti}</span></div>` : ''}
+                </div>
+            </div>`;
+        }
+        html += `</div>`;
+    } else {
+        html += `<div class="account-error">No showcase characters found. Set characters in your in-game profile showcase.</div>`;
+    }
+
+    accountContent.innerHTML = html;
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/* ---------- UID input listener ---------- */
+if (uidInput) {
+    uidInput.addEventListener('input', () => {
+        clearTimeout(accountFetchTimer);
+        const uid = uidInput.value.trim();
+        if (!uid) {
+            accountPanel.style.display = 'none';
+            return;
+        }
+        // Debounce: fetch 1.2 s after user stops typing
+        accountFetchTimer = setTimeout(() => fetchAndDisplayAccount(uid), 1200);
+    });
+
+    uidInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            clearTimeout(accountFetchTimer);
+            fetchAndDisplayAccount(uidInput.value.trim());
+        }
+    });
+}
 
 /* ---------- Init ---------- */
 window.addEventListener('DOMContentLoaded', () => {
