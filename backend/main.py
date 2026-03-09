@@ -4,10 +4,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Dict, List, Optional
 from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
-from optimizer import ArtifactOptimizer
-from optimizer.models import OptimizationRequest, RecommendBuildRequest, TeamOptimizeRequest
+from optimizer.models import (
+    Artifact,
+    Constraint,
+    Substat,
+    Weapon,
+)
+from optimizer.solver import optimize_artifacts
 import logging
 import os
 
@@ -23,11 +29,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Read and log API key status so it is easy to diagnose configuration issues
-_api_key = os.environ.get("OPENAI_API_KEY")
+_api_key = os.environ.get("GROQ_API_KEY")
 if _api_key:
-    logger.info("OPENAI_API_KEY loaded successfully")
+    logger.info("GROQ_API_KEY loaded successfully")
 else:
-    logger.warning("OPENAI_API_KEY not found in environment variables - chat will use template responses")
+    logger.warning("GROQ_API_KEY not found in environment variables - chat will use template responses")
 
 app = FastAPI(
     title="Genshin AI Coach",
@@ -48,12 +54,77 @@ app.add_middleware(
 # from os.environ regardless of how load_dotenv behaves in the environment.
 enka_service = EnkaService()
 chat_interface = ChatInterface(api_key=_api_key)
-artifact_optimizer = ArtifactOptimizer(enka_service)
 
+# ---------------------------------------------------------------------------
 # Request models
+# ---------------------------------------------------------------------------
+
 class ChatRequest(BaseModel):
     query: str
     uid: str = None
+
+
+class SubstatModel(BaseModel):
+    stat: str
+    value: float
+
+
+class ArtifactModel(BaseModel):
+    id: str
+    slot: str
+    set_key: str
+    rarity: int = 5
+    level: int = 20
+    main_stat: str
+    main_stat_value: float
+    substats: List[SubstatModel] = []
+
+
+class WeaponModel(BaseModel):
+    key: str
+    level: int = 90
+    ascension: int = 6
+    refinement: int = 1
+    base_atk: float = 0.0
+    sub_stat: str = ""
+    sub_stat_value: float = 0.0
+
+
+class ConstraintModel(BaseModel):
+    type: str
+    slot: Optional[str] = None
+    value: Optional[str] = None
+    threshold: Optional[float] = None
+
+
+class OptimizeRequest(BaseModel):
+    uid: Optional[str] = None
+    character: str
+    artifacts: List[ArtifactModel]
+    target_stats: Dict[str, float]
+    constraints: List[ConstraintModel] = []
+    weapon: Optional[WeaponModel] = None
+    buffs: Optional[Dict[str, float]] = None
+    top_n: int = 5
+
+
+class RecommendedBuildRequest(BaseModel):
+    uid: Optional[str] = None
+    character: str
+    artifacts: List[ArtifactModel]
+    weapon: Optional[WeaponModel] = None
+    buffs: Optional[Dict[str, float]] = None
+    top_n: int = 5
+
+
+class OptimizeTeamRequest(BaseModel):
+    uid: Optional[str] = None
+    team: List[str]
+    artifacts_by_character: Dict[str, List[ArtifactModel]]
+    target_stats_by_character: Optional[Dict[str, Dict[str, float]]] = None
+    weapons_by_character: Optional[Dict[str, WeaponModel]] = None
+    buffs_by_character: Optional[Dict[str, Dict[str, float]]] = None
+    top_n: int = 3
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
@@ -125,116 +196,205 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
+# Helper – convert Pydantic models to optimizer domain objects
+# ---------------------------------------------------------------------------
+
+def _to_artifact(a: ArtifactModel) -> Artifact:
+    return Artifact(
+        id=a.id,
+        slot=a.slot,
+        set_key=a.set_key,
+        rarity=a.rarity,
+        level=a.level,
+        main_stat=a.main_stat,
+        main_stat_value=a.main_stat_value,
+        substats=[Substat(stat=s.stat, value=s.value) for s in a.substats],
+    )
+
+
+def _to_weapon(w: Optional[WeaponModel]) -> Optional[Weapon]:
+    if w is None:
+        return None
+    return Weapon(
+        key=w.key,
+        level=w.level,
+        ascension=w.ascension,
+        refinement=w.refinement,
+        base_atk=w.base_atk,
+        sub_stat=w.sub_stat,
+        sub_stat_value=w.sub_stat_value,
+    )
+
+
+def _to_constraint(c: ConstraintModel) -> Constraint:
+    return Constraint(
+        type=c.type,
+        slot=c.slot,
+        value=c.value,
+        threshold=c.threshold,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Default target stats per character (used by /api/recommended-build)
+# Based on community-accepted optimal build targets.
+# ---------------------------------------------------------------------------
+
+DEFAULT_TARGET_STATS: Dict[str, Dict[str, float]] = {
+    "Ganyu":         {"Crit Rate": 0.70, "Crit DMG": 1.40, "ATK%": 0.50},
+    "Hu Tao":        {"Crit Rate": 0.65, "Crit DMG": 1.30, "HP%": 0.50},
+    "Raiden Shogun": {"Energy Recharge": 2.00, "Crit Rate": 0.55, "Crit DMG": 1.10},
+    "Zhongli":       {"HP%": 0.50, "DEF%": 0.30},
+    "Kazuha":        {"Elemental Mastery": 800.0, "Energy Recharge": 1.60},
+    "Nahida":        {"Elemental Mastery": 900.0, "Crit Rate": 0.55, "Crit DMG": 1.10},
+    "_default":      {"Crit Rate": 0.60, "Crit DMG": 1.20, "ATK%": 0.40},
+}
+
+
+# ---------------------------------------------------------------------------
 # Artifact optimizer endpoints
 # ---------------------------------------------------------------------------
 
-@app.post("/api/optimizer/optimize")
-async def optimizer_optimize(request: OptimizationRequest):
+@app.post("/api/optimize")
+async def optimize(request: OptimizeRequest):
     """
-    Return the top N artifact builds for a character.
+    Find the best artifact combinations for a character.
 
-    The optimizer scores every artifact the player has in their showcase
-    and returns the best-performing combinations based on the requested
-    target stats and optional minimum-stat constraints.
-
-    Example request body:
+    Example request:
     {
-        "uid": "123456789",
         "character": "Ganyu",
-        "target_stats": {"Crit Rate": 2.0, "Crit Dmg": 1.0, "Atk Percent": 0.5},
-        "constraints": {"Crit Rate": 0.5},
+        "artifacts": [...],
+        "target_stats": {"Crit Rate": 0.7, "Crit DMG": 1.4},
         "top_n": 5
     }
     """
     try:
-        logger.info(f"Optimizer request for {request.character} (UID {request.uid})")
-        builds = await artifact_optimizer.optimize(
-            uid=request.uid,
-            character=request.character,
-            target_stats=request.target_stats or None,
-            constraints=request.constraints or None,
+        logger.info(f"Optimizing artifacts for {request.character}")
+        domain_artifacts = [_to_artifact(a) for a in request.artifacts]
+        domain_weapon = _to_weapon(request.weapon)
+        domain_constraints = [_to_constraint(c) for c in request.constraints]
+
+        builds = optimize_artifacts(
+            character_key=request.character,
+            available_artifacts=domain_artifacts,
+            target_stats=request.target_stats,
+            constraints=domain_constraints,
+            weapon=domain_weapon,
+            buffs=request.buffs,
             top_n=request.top_n,
-            allow_equipped=request.allow_equipped,
         )
+
         return {
             "success": True,
             "character": request.character,
-            "builds": [b.model_dump() for b in builds],
-            "build_count": len(builds),
+            "builds": [b.to_dict() for b in builds],
+            "total_builds_found": len(builds),
             "timestamp": datetime.now().isoformat(),
         }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in optimizer: {str(e)}")
+        logger.error(f"Error optimizing artifacts: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/optimizer/recommend-build")
-async def optimizer_recommend_build(request: RecommendBuildRequest):
+@app.post("/api/recommended-build")
+async def recommended_build(request: RecommendedBuildRequest):
     """
-    Return the single recommended artifact build for a character using
-    default stat weights based on the character's role.
+    Optimize artifacts against community-recommended stat targets for a character.
 
-    Example request body:
+    Example request:
     {
-        "uid": "123456789",
-        "character": "Ganyu"
+        "character": "Ganyu",
+        "artifacts": [...],
+        "top_n": 3
     }
     """
     try:
-        logger.info(f"Recommend build for {request.character} (UID {request.uid})")
-        build = await artifact_optimizer.recommend_build(
-            uid=request.uid,
-            character=request.character,
+        logger.info(f"Fetching recommended build for {request.character}")
+        target_stats = DEFAULT_TARGET_STATS.get(
+            request.character,
+            DEFAULT_TARGET_STATS["_default"],
         )
+        domain_artifacts = [_to_artifact(a) for a in request.artifacts]
+        domain_weapon = _to_weapon(request.weapon)
+
+        builds = optimize_artifacts(
+            character_key=request.character,
+            available_artifacts=domain_artifacts,
+            target_stats=target_stats,
+            weapon=domain_weapon,
+            buffs=request.buffs,
+            top_n=request.top_n,
+        )
+
         return {
             "success": True,
             "character": request.character,
-            "build": build.model_dump() if build else None,
+            "target_stats": target_stats,
+            "builds": [b.to_dict() for b in builds],
+            "total_builds_found": len(builds),
             "timestamp": datetime.now().isoformat(),
         }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in recommend-build: {str(e)}")
+        logger.error(f"Error getting recommended build: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/optimizer/team-optimize")
-async def optimizer_team_optimize(request: TeamOptimizeRequest):
+@app.post("/api/optimize-team")
+async def optimize_team(request: OptimizeTeamRequest):
     """
-    Optimise artifact builds for each character in a team.
+    Optimize artifact builds for each character in a team independently.
 
-    Each character is optimised independently using its default stat weights.
-
-    Example request body:
+    Example request:
     {
-        "uid": "123456789",
-        "team_characters": ["Ganyu", "Zhongli", "Fischl", "Kokomi"]
+        "team": ["Ganyu", "Zhongli", "Fischl", "Kokomi"],
+        "artifacts_by_character": {
+            "Ganyu": [...],
+            "Zhongli": [...]
+        }
     }
     """
     try:
-        logger.info(
-            f"Team optimize for {request.team_characters} (UID {request.uid})"
-        )
-        results = await artifact_optimizer.optimize_team(
-            uid=request.uid,
-            team_characters=request.team_characters,
-        )
+        logger.info(f"Optimizing team: {request.team}")
+        team_results = {}
+
+        for character in request.team:
+            raw_artifacts = request.artifacts_by_character.get(character, [])
+            domain_artifacts = [_to_artifact(a) for a in raw_artifacts]
+
+            target_stats = (request.target_stats_by_character or {}).get(
+                character,
+                DEFAULT_TARGET_STATS.get(character, DEFAULT_TARGET_STATS["_default"]),
+            )
+
+            raw_weapon = (request.weapons_by_character or {}).get(character)
+            domain_weapon = _to_weapon(raw_weapon)
+
+            team_buffs = (request.buffs_by_character or {}).get(character)
+
+            builds = optimize_artifacts(
+                character_key=character,
+                available_artifacts=domain_artifacts,
+                target_stats=target_stats,
+                weapon=domain_weapon,
+                buffs=team_buffs,
+                top_n=request.top_n,
+            )
+
+            team_results[character] = {
+                "target_stats": target_stats,
+                "builds": [b.to_dict() for b in builds],
+            }
+
         return {
             "success": True,
-            "team_builds": {
-                char: (build.model_dump() if build else None)
-                for char, build in results.items()
-            },
+            "team": request.team,
+            "results": team_results,
             "timestamp": datetime.now().isoformat(),
         }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in team-optimize: {str(e)}")
+        logger.error(f"Error optimizing team: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Mount frontend static files (CSS, JS, etc.) - must be after API routes
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
