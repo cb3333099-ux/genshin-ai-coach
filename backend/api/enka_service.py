@@ -16,6 +16,10 @@ class EnkaService:
     ENKA_CHARACTERS_URL = (
         "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/characters.json"
     )
+    # genshin.dev API – always up-to-date, provides element/rarity/weapon/region.
+    # Response: list of objects with fields: name, vision (element), rarity,
+    # weapon, nation (region), title, gender, affiliation, constellation, etc.
+    GENSHIN_DEV_CHARACTERS_URL = "https://genshin.jmp.blue/characters/all?lang=en"
     CHARACTER_CACHE_DURATION = 86400  # Refresh character list once per day
 
     # Enka element code → friendly name
@@ -42,15 +46,55 @@ class EnkaService:
 
     async def _ensure_character_data(self) -> None:
         """
-        Fetch character data from Enka's community characters.json if the
-        class-level cache is empty or stale.  Falls back to a built-in
-        minimal dictionary so the service keeps working even when the
-        upstream file is unreachable.
+        Build the class-level character database by combining two sources:
+          1. Enka Network characters.json – provides the numeric avatar IDs we
+             need to resolve Enka API payloads.
+          2. genshin.dev API – always up-to-date; provides element, rarity,
+             weapon type and nation for every current character.
+        Both fetches are attempted in parallel; if either fails the other's
+        data is still used.  The built-in fallback dict is the last resort.
         """
         age = time.time() - EnkaService._character_db_loaded_at
         if EnkaService._character_db and age < self.CHARACTER_CACHE_DURATION:
             return
 
+        # Fetch both sources concurrently; return_exceptions=True lets one failure
+        # not block the other from succeeding.
+        results = await asyncio.gather(
+            self._fetch_enka_characters(),
+            self._load_character_database_from_api(),
+            return_exceptions=True,
+        )
+        enka_db = results[0] if not isinstance(results[0], BaseException) else {}
+        genshin_dev_db = results[1] if not isinstance(results[1], BaseException) else {}
+
+        # Merge genshin.dev data into the Enka DB by matching on normalised name.
+        # genshin.dev supplies element/rarity/weapon/region; Enka supplies the ID.
+        if enka_db and genshin_dev_db:
+            for char_info in enka_db.values():
+                key = self._normalize_name(char_info["name"])
+                dev = genshin_dev_db.get(key)
+                if dev:
+                    # genshin.dev's element names ("Hydro", "Cryo", …) are already
+                    # in the friendly format we use, so prefer them over Enka's.
+                    char_info["element"] = dev.get("element") or char_info.get("element", "Unknown")
+                    char_info.setdefault("rarity", dev.get("rarity"))
+                    char_info.setdefault("weapon", dev.get("weapon"))
+                    char_info.setdefault("region", dev.get("region"))
+
+        new_db = enka_db or {}
+
+        if new_db:
+            EnkaService._character_db = new_db
+            EnkaService._character_db_loaded_at = time.time()
+            logger.info(f"Loaded {len(new_db)} characters into character database")
+        elif not EnkaService._character_db:
+            EnkaService._character_db = self._builtin_character_fallback()
+            EnkaService._character_db_loaded_at = time.time()
+            logger.info("Using built-in character fallback database")
+
+    async def _fetch_enka_characters(self) -> Dict[int, Dict[str, str]]:
+        """Fetch avatar ID → name/element mapping from Enka Network characters.json."""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -70,24 +114,65 @@ class EnkaService:
                                     "name": info.get("NameText", f"Character {char_id}"),
                                     "element": self.ELEMENT_MAP.get(element_code, "Unknown"),
                                 }
-                        EnkaService._character_db = new_db
-                        EnkaService._character_db_loaded_at = time.time()
                         logger.info(
                             f"Loaded {len(new_db)} characters from Enka character database"
                         )
-                        return
+                        return new_db
                     else:
                         logger.warning(
                             f"Enka characters.json returned HTTP {response.status}"
                         )
         except Exception as exc:
-            logger.warning(f"Could not fetch character database: {exc}")
+            logger.warning(f"Could not fetch Enka character database: {exc}")
+        return {}
 
-        # Fallback: keep existing cache if we have one, otherwise use built-in stub
-        if not EnkaService._character_db:
-            EnkaService._character_db = self._builtin_character_fallback()
-            EnkaService._character_db_loaded_at = time.time()
-            logger.info("Using built-in character fallback database")
+    async def _load_character_database_from_api(self) -> Dict[str, Dict]:
+        """
+        Fetch all character data from the genshin.dev API.
+
+        Returns a dict keyed by *normalised* character name so it can be
+        joined against the Enka ID database by name matching.  Each entry
+        contains: name, element (vision), rarity, weapon, region (nation).
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.GENSHIN_DEV_CHARACTERS_URL,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    headers={"User-Agent": "GenshinAICoach/1.0"},
+                ) as response:
+                    if response.status == 200:
+                        # content_type=None skips Content-Type validation; genshin.dev
+                        # sometimes returns "text/plain" instead of "application/json".
+                        data = await response.json(content_type=None)
+                        result: Dict[str, Dict] = {}
+                        for char in data:
+                            name = char.get("name", "")
+                            if not name:
+                                continue
+                            result[self._normalize_name(name)] = {
+                                "name": name,
+                                "element": char.get("vision", "Unknown"),
+                                "rarity": char.get("rarity"),
+                                "weapon": char.get("weapon"),
+                                "region": char.get("nation"),
+                            }
+                        logger.info(
+                            f"Loaded {len(result)} characters from genshin.dev API"
+                        )
+                        return result
+                    else:
+                        logger.warning(
+                            f"genshin.dev API returned HTTP {response.status}"
+                        )
+        except Exception as exc:
+            logger.warning(f"Could not fetch genshin.dev character database: {exc}")
+        return {}
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Normalise a character name for cross-source matching (lowercase, no separators)."""
+        return name.lower().replace(" ", "").replace("'", "").replace("-", "").replace(".", "")
 
     def _get_char_name(self, character_id: Optional[int]) -> str:
         info = EnkaService._character_db.get(character_id) if character_id else None
@@ -100,6 +185,16 @@ class EnkaService:
         if info:
             return info["element"]
         return "Unknown"
+
+    def _get_char_info(self, character_id: Optional[int]) -> Dict[str, Any]:
+        """Return the full cached info dict for a character, or sensible defaults."""
+        info = EnkaService._character_db.get(character_id) if character_id else None
+        if info:
+            return info.copy()
+        return {
+            "name": f"Character {character_id}" if character_id else "Unknown",
+            "element": "Unknown",
+        }
 
     @staticmethod
     def _builtin_character_fallback() -> Dict[int, Dict[str, str]]:
@@ -286,10 +381,14 @@ class EnkaService:
             show_list = player_info.get("showAvatarInfoList", [])
             for show_char in show_list:
                 char_id = show_char.get("avatarId")
+                char_info = self._get_char_info(char_id)
                 parsed_data["characters"].append({
                     "id": char_id,
-                    "name": self._get_char_name(char_id),
-                    "element": self._get_char_element(char_id),
+                    "name": char_info["name"],
+                    "element": char_info["element"],
+                    "rarity": char_info.get("rarity"),
+                    "weapon_type": char_info.get("weapon"),
+                    "region": char_info.get("region"),
                     "level": show_char.get("level", 1),
                     "ascension": 0,
                     "constellations": 0,
@@ -306,8 +405,9 @@ class EnkaService:
         """Parse individual character data from Enka avatarInfoList entry"""
         
         character_id = char_data.get("avatarId")
-        char_name = self._get_char_name(character_id)
-        char_element = self._get_char_element(character_id)
+        char_info = self._get_char_info(character_id)
+        char_name = char_info["name"]
+        char_element = char_info["element"]
 
         # Character level is in propMap["4001"]
         prop_map = char_data.get("propMap", {})
@@ -388,6 +488,9 @@ class EnkaService:
             "id": character_id,
             "name": char_name,
             "element": char_element,
+            "rarity": char_info.get("rarity"),
+            "weapon_type": char_info.get("weapon"),
+            "region": char_info.get("region"),
             "level": level,
             "ascension": ascension,
             "constellations": constellations,
