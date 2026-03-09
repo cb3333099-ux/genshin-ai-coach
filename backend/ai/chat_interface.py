@@ -17,6 +17,7 @@ class ChatInterface:
         else:
             try:
                 from groq import Groq
+                # Initialize Groq client without problematic parameters
                 self.client = Groq(api_key=self.api_key)
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq: {e} - using mock responses")
@@ -56,28 +57,32 @@ class ChatInterface:
                 "content": user_message
             })
             
-            # Get response from Groq
-            response = self.client.chat.completions.create(
-                model="mixtral-8x7b-32768",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *self.conversation_history
-                ],
-                max_tokens=1000,
-                temperature=0.7
-            )
-            
-            # Extract response
-            assistant_message = response.choices[0].message.content
-            
-            # Add to history
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": assistant_message
-            })
-            
-            logger.info(f"Chat response generated for query: {query}")
-            return assistant_message
+            # Get response from Groq - with proper error handling
+            try:
+                response = self.client.chat.completions.create(
+                    model="mixtral-8x7b-32768",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *self.conversation_history
+                    ],
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                
+                # Extract response
+                assistant_message = response.choices[0].message.content
+                
+                # Add to history
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": assistant_message
+                })
+                
+                logger.info(f"Chat response generated for query: {query}")
+                return assistant_message
+            except Exception as api_error:
+                logger.error(f"Groq API error: {str(api_error)}")
+                return self._get_mock_response(query)
             
         except Exception as e:
             logger.error(f"Error in chat interface: {str(e)}")
