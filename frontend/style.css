@@ -554,6 +554,162 @@ body {
     line-height: 1.4;
 }
 
+/* ---------- Account Info Panel ---------- */
+.account-panel {
+    animation: fadeInUp 0.4s ease both;
+}
+
+.account-content {
+    padding: 14px 18px;
+}
+
+.account-loading-msg,
+.account-error {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 8px 0;
+    line-height: 1.5;
+}
+
+.account-error {
+    color: #ff7a7a;
+}
+
+.account-header {
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--glass-bd);
+}
+
+.account-name {
+    font-size: 1rem;
+    font-weight: 700;
+    background: linear-gradient(90deg, #a8c8ff, #d4a8ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.account-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 3px;
+}
+
+.account-sig {
+    font-size: 0.73rem;
+    color: var(--accent);
+    font-style: italic;
+    margin-top: 5px;
+    opacity: 0.85;
+}
+
+.account-loading {
+    margin-left: auto;
+    font-size: 0.85rem;
+    animation: spin 1.2s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* Character list inside account panel */
+.char-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.char-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--glass-bd);
+    border-radius: 12px;
+    padding: 10px 12px;
+    transition: transform var(--transition), background var(--transition);
+    animation: fadeInUp 0.35s ease both;
+}
+
+.char-card:hover {
+    transform: translateX(3px);
+    background: rgba(91, 141, 238, 0.07);
+}
+
+.char-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.char-elem-badge {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+    border: 1px solid;
+}
+
+/* Reuse element badge colours */
+.char-elem-badge.el-pyro    { background: rgba(var(--el-pyro-rgb),    0.15); border-color: rgba(var(--el-pyro-rgb),    0.4); }
+.char-elem-badge.el-hydro   { background: rgba(var(--el-hydro-rgb),   0.15); border-color: rgba(var(--el-hydro-rgb),   0.4); }
+.char-elem-badge.el-anemo   { background: rgba(var(--el-anemo-rgb),   0.15); border-color: rgba(var(--el-anemo-rgb),   0.4); }
+.char-elem-badge.el-electro { background: rgba(var(--el-electro-rgb), 0.15); border-color: rgba(var(--el-electro-rgb), 0.4); }
+.char-elem-badge.el-dendro  { background: rgba(var(--el-dendro-rgb),  0.15); border-color: rgba(var(--el-dendro-rgb),  0.4); }
+.char-elem-badge.el-cryo    { background: rgba(var(--el-cryo-rgb),    0.15); border-color: rgba(var(--el-cryo-rgb),    0.4); }
+.char-elem-badge.el-geo     { background: rgba(var(--el-geo-rgb),     0.15); border-color: rgba(var(--el-geo-rgb),     0.4); }
+
+.char-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.char-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.char-sub {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+
+.char-details {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.char-detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.cd-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-right: 6px;
+}
+
+.cd-val {
+    color: var(--text);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Toast ---------- */
 .toast {
     position: fixed;

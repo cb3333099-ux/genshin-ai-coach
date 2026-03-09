@@ -46,10 +46,7 @@ class ChatInterface:
             # Add context if available
             context_msg = ""
             if account_data:
-                context_msg = f"\n\nPlayer Context:\n"
-                context_msg += f"- Nickname: {account_data.get('nickname', 'Unknown')}\n"
-                context_msg += f"- Level: {account_data.get('level', 'Unknown')}\n"
-                context_msg += f"- World Level: {account_data.get('world_level', 'Unknown')}\n"
+                context_msg = self._build_player_context(account_data)
             
             # Create user message
             user_message = query + context_msg
@@ -87,6 +84,79 @@ class ChatInterface:
             logger.error(f"Error in chat interface: {str(e)}")
             return self._get_mock_response(query)
     
+    def _build_player_context(self, account_data: dict) -> str:
+        """Build rich player context string for the AI prompt"""
+        lines = ["\n\n=== PLAYER ACCOUNT DATA ==="]
+        lines.append(f"Nickname: {account_data.get('nickname', 'Unknown')}")
+        lines.append(f"Adventure Rank: {account_data.get('level', 'Unknown')}")
+        lines.append(f"World Level: {account_data.get('world_level', 'Unknown')}")
+        
+        abyss_floor = account_data.get("abyss_floor", 0)
+        abyss_chamber = account_data.get("abyss_chamber", 0)
+        if abyss_floor:
+            lines.append(f"Spiral Abyss Progress: Floor {abyss_floor}-{abyss_chamber}")
+
+        achievements = account_data.get("achievement_count", 0)
+        if achievements:
+            lines.append(f"Achievements: {achievements}")
+
+        sig = account_data.get("signature", "")
+        if sig:
+            lines.append(f"Signature: {sig}")
+
+        characters = account_data.get("characters", [])
+        if characters:
+            lines.append(f"\nShowcased Characters ({len(characters)} total):")
+            for char in characters:
+                name = char.get("name", "Unknown")
+                element = char.get("element", "")
+                level = char.get("level", 1)
+                ascension = char.get("ascension", 0)
+                constellations = char.get("constellations", 0)
+                friendship = char.get("friendship", 0)
+
+                char_line = f"  • {name} (C{constellations}) | Lv.{level}/{'90' if ascension >= 6 else str(20 + ascension * 10)}"
+                if element:
+                    char_line += f" | {element}"
+                if friendship:
+                    char_line += f" | Friendship {friendship}"
+                lines.append(char_line)
+
+                # Weapon
+                weapon = char.get("weapon", {})
+                if weapon and weapon.get("level"):
+                    w_level = weapon.get("level")
+                    w_ref = weapon.get("refinement", 1)
+                    w_rarity = weapon.get("rarity", "?")
+                    lines.append(f"    Weapon: {w_rarity}★ | Lv.{w_level} | R{w_ref}")
+
+                # Talents
+                talents = char.get("talents", {})
+                if talents:
+                    na = talents.get("normal_attack", "?")
+                    es = talents.get("elemental_skill", "?")
+                    eb = talents.get("elemental_burst", "?")
+                    lines.append(f"    Talents: NA:{na} / Skill:{es} / Burst:{eb}")
+
+                # Stats
+                stats = char.get("stats", {})
+                if stats:
+                    stat_parts = []
+                    for k, v in stats.items():
+                        stat_parts.append(f"{k}:{v}")
+                    lines.append(f"    Stats: {' | '.join(stat_parts)}")
+
+                # Artifacts
+                artifacts = char.get("artifacts", [])
+                if artifacts:
+                    max_level = max((a.get("level", 0) for a in artifacts), default=0)
+                    rarity_5 = sum(1 for a in artifacts if a.get("rarity") == 5)
+                    lines.append(f"    Artifacts: {len(artifacts)} pieces | {rarity_5}x 5★ | Best: +{max_level}")
+
+        lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression. Reference character names and levels explicitly.")
+        lines.append("=== END PLAYER DATA ===")
+        return "\n".join(lines)
+
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI coach"""
         return """You are Genshin AI Coach, an expert Genshin Impact gaming assistant.
