@@ -29,11 +29,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Read and log API key status so it is easy to diagnose configuration issues
-_api_key = os.environ.get("OPENAI_API_KEY")
+_api_key = os.environ.get("GROQ_API_KEY")
 if _api_key:
-    logger.info("OPENAI_API_KEY loaded successfully")
+    logger.info("GROQ_API_KEY loaded successfully")
 else:
-    logger.warning("OPENAI_API_KEY not found in environment variables - chat will use template responses")
+    logger.warning("GROQ_API_KEY not found in environment variables - chat will use template responses")
 
 app = FastAPI(
     title="Genshin AI Coach",
