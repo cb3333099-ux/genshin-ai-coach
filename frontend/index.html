@@ -1,306 +1,166 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Genshin AI Coach</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-
-        .container {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-            width: 100%;
-            max-width: 600px;
-            display: flex;
-            flex-direction: column;
-            height: 80vh;
-            max-height: 700px;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 15px 15px 0 0;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 24px;
-            margin-bottom: 5px;
-        }
-
-        .header p {
-            font-size: 14px;
-            opacity: 0.9;
-        }
-
-        .chat-box {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: #f8f9fa;
-        }
-
-        .message {
-            margin-bottom: 15px;
-            display: flex;
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .message.user {
-            justify-content: flex-end;
-        }
-
-        .message-content {
-            background: white;
-            padding: 12px 16px;
-            border-radius: 10px;
-            max-width: 80%;
-            word-wrap: break-word;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-
-        .message.user .message-content {
-            background: #667eea;
-            color: white;
-            border-radius: 10px 0 10px 10px;
-        }
-
-        .message.bot .message-content {
-            background: white;
-            color: #333;
-            border-radius: 0 10px 10px 10px;
-        }
-
-        .input-area {
-            padding: 20px;
-            border-top: 1px solid #eee;
-            display: flex;
-            gap: 10px;
-        }
-
-        .input-area input {
-            flex: 1;
-            border: 2px solid #e0e0e0;
-            border-radius: 25px;
-            padding: 12px 20px;
-            font-size: 14px;
-            transition: border-color 0.3s;
-        }
-
-        .input-area input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .input-area button {
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 25px;
-            padding: 12px 25px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background 0.3s;
-        }
-
-        .input-area button:hover {
-            background: #764ba2;
-        }
-
-        .input-area button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-
-        .loading {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #667eea;
-            border-radius: 50%;
-            animation: blink 1.4s infinite;
-        }
-
-        .loading:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .loading:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes blink {
-            0%, 60%, 100% {
-                opacity: 0.3;
-            }
-            30% {
-                opacity: 1;
-            }
-        }
-
-        .uid-section {
-            padding: 15px 20px;
-            background: #f0f0f0;
-            border-bottom: 1px solid #eee;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .uid-section input {
-            flex: 1;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 13px;
-        }
-
-        .uid-section label {
-            font-size: 12px;
-            color: #666;
-            white-space: nowrap;
-        }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Genshin AI Coach ✨</title>
+    <meta name="description" content="Your personal AI-powered Genshin Impact advisor for team builds, farming routes, and strategy." />
+    <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🎮 Genshin AI Coach</h1>
-            <p>Your personal Genshin Impact assistant</p>
-        </div>
 
-        <div class="uid-section">
-            <label>Your UID (optional):</label>
-            <input type="text" id="uidInput" placeholder="Enter your Genshin UID for personalized advice">
-        </div>
+<!-- Animated background -->
+<div class="bg-canvas"></div>
+<div class="particles"></div>
 
-        <div class="chat-box" id="chatBox"></div>
+<!-- App wrapper -->
+<div class="app-wrapper">
 
-        <div class="input-area">
-            <input 
-                type="text" 
-                id="messageInput" 
-                placeholder="Ask me anything about Genshin Impact..."
-                autocomplete="off"
-            >
-            <button id="sendBtn" onclick="sendMessage()">Send</button>
+    <!-- ── Header ── -->
+    <header class="header">
+        <div class="header-icon">⚔️</div>
+        <div class="header-text">
+            <h1>Genshin AI Coach</h1>
+            <p>Your personal Teyvat strategist</p>
         </div>
+        <div class="status-pill">
+            <div class="status-dot"></div>
+            <span>Online</span>
+        </div>
+    </header>
+
+    <!-- ── Content grid ── -->
+    <div class="content-grid">
+
+        <!-- ── Left: Chat panel ── -->
+        <section class="chat-panel">
+            <div class="chat-header">
+                <span class="chat-header-icon">💬</span>
+                Chat with your AI Coach
+            </div>
+
+            <!-- UID row -->
+            <div class="uid-row">
+                <label for="uidInput">UID (optional):</label>
+                <input
+                    type="text"
+                    id="uidInput"
+                    placeholder="Enter your Genshin UID for personalised advice"
+                    maxlength="12"
+                />
+            </div>
+
+            <!-- Messages -->
+            <div class="chat-messages" id="chatMessages"></div>
+
+            <!-- Input row -->
+            <div class="chat-input-row">
+                <input
+                    type="text"
+                    id="chatInput"
+                    class="chat-input"
+                    placeholder="Ask me about builds, teams, farming…"
+                    autocomplete="off"
+                    maxlength="500"
+                />
+                <button id="sendBtn" class="send-btn" title="Send">➤</button>
+            </div>
+        </section>
+
+        <!-- ── Right: Info panel ── -->
+        <aside class="info-panel">
+
+            <!-- Elements card -->
+            <div class="info-card">
+                <div class="card-header">
+                    <span class="icon">🌀</span> Elements
+                </div>
+                <div class="element-grid">
+                    <span class="element-badge el-pyro">�� Pyro</span>
+                    <span class="element-badge el-hydro">💧 Hydro</span>
+                    <span class="element-badge el-anemo">🌿 Anemo</span>
+                    <span class="element-badge el-electro">⚡ Electro</span>
+                    <span class="element-badge el-dendro">🌱 Dendro</span>
+                    <span class="element-badge el-cryo">❄️ Cryo</span>
+                    <span class="element-badge el-geo">🪨 Geo</span>
+                </div>
+            </div>
+
+            <!-- Quick questions card -->
+            <div class="info-card">
+                <div class="card-header">
+                    <span class="icon">⚡</span> Quick Questions
+                </div>
+                <div class="quick-btns">
+                    <button class="quick-btn" data-q="What are the best team compositions for Spiral Abyss floor 12?">
+                        🌀 Best Spiral Abyss teams?
+                    </button>
+                    <button class="quick-btn" data-q="How do I build Hu Tao for maximum DPS?">
+                        🔥 How to build Hu Tao?
+                    </button>
+                    <button class="quick-btn" data-q="What is the most efficient resin usage per day?">
+                        💎 Efficient resin usage tips?
+                    </button>
+                    <button class="quick-btn" data-q="Which artifacts should I farm for a Freeze team?">
+                        ❄️ Best Freeze team artifacts?
+                    </button>
+                    <button class="quick-btn" data-q="What characters are recommended for a beginner?">
+                        ✨ Best beginner characters?
+                    </button>
+                </div>
+            </div>
+
+            <!-- Farming schedule card -->
+            <div class="info-card">
+                <div class="card-header">
+                    <span class="icon">📅</span> Farming Schedule
+                </div>
+                <div class="schedule-list">
+                    <div class="schedule-item">
+                        <span class="day">Mon</span>
+                        <span class="materials">Slime, Whopperflower, Hilichurl</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Tue</span>
+                        <span class="materials">Fatui, Specter, Rifthound</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Wed</span>
+                        <span class="materials">Cecilia Garden · Midsummer Courtyard</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Thu</span>
+                        <span class="materials">Slime, Whopperflower, Hilichurl</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Fri</span>
+                        <span class="materials">Fatui, Specter, Rifthound</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Sat</span>
+                        <span class="materials">Peak of Vindagnyr · Hidden Palace</span>
+                    </div>
+                    <div class="schedule-item">
+                        <span class="day">Sun</span>
+                        <span class="materials">All domains open — plan ahead!</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tips card -->
+            <div class="info-card">
+                <div class="card-header">
+                    <span class="icon">💡</span> Tips
+                </div>
+                <div class="card-body">
+                    Enter your <strong>UID</strong> to receive personalised build advice based on your actual characters and artifacts. The coach can suggest optimised team comps and farming priorities tailored to your account.
+                </div>
+            </div>
+
+        </aside>
     </div>
+</div>
 
-    <script>
-        const chatBox = document.getElementById('chatBox');
-        const messageInput = document.getElementById('messageInput');
-        const sendBtn = document.getElementById('sendBtn');
-        const uidInput = document.getElementById('uidInput');
-
-        // Allow Enter key to send
-        messageInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        async function sendMessage() {
-            const message = messageInput.value.trim();
-            if (!message) return;
-
-            // Disable input
-            sendBtn.disabled = true;
-            messageInput.disabled = true;
-
-            // Add user message to chat
-            addMessage(message, 'user');
-            messageInput.value = '';
-
-            // Show loading indicator
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message bot';
-            loadingDiv.innerHTML = '<div class="message-content"><div class="loading"></div><div class="loading"></div><div class="loading"></div></div>';
-            chatBox.appendChild(loadingDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            try {
-                const uid = uidInput.value.trim();
-                const response = await fetch('http://127.0.0.1:8000/api/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        query: message,
-                        uid: uid || ''
-                    })
-                });
-
-                const data = await response.json();
-
-                // Remove loading indicator
-                loadingDiv.remove();
-
-                if (data.success) {
-                    addMessage(data.response, 'bot');
-                } else {
-                    addMessage('Sorry, something went wrong. Please try again.', 'bot');
-                }
-            } catch (error) {
-                loadingDiv.remove();
-                addMessage('Error: Could not connect to server. Make sure it\'s running!', 'bot');
-                console.error(error);
-            }
-
-            // Re-enable input
-            sendBtn.disabled = false;
-            messageInput.disabled = false;
-            messageInput.focus();
-        }
-
-        function addMessage(text, sender) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}`;
-
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            contentDiv.textContent = text;
-
-            messageDiv.appendChild(contentDiv);
-            chatBox.appendChild(messageDiv);
-            chatBox.scrollTop = chatBox.scrollHeight;
-        }
-
-        // Initial welcome message
-        window.addEventListener('load', () => {
-            addMessage('👋 Welcome to Genshin AI Coach! Ask me anything about Genshin Impact - team building, farming strategies, character builds, and more!', 'bot');
-        });
-    </script>
+<script src="script.js"></script>
 </body>
 </html>
