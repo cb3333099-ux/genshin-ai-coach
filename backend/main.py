@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from datetime import datetime
 from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
+from optimizer import ArtifactOptimizer
+from optimizer.models import OptimizationRequest, RecommendBuildRequest, TeamOptimizeRequest
 import logging
 import os
 
@@ -46,6 +48,7 @@ app.add_middleware(
 # from os.environ regardless of how load_dotenv behaves in the environment.
 enka_service = EnkaService()
 chat_interface = ChatInterface(api_key=_api_key)
+artifact_optimizer = ArtifactOptimizer(enka_service)
 
 # Request models
 class ChatRequest(BaseModel):
@@ -119,6 +122,118 @@ async def chat(request: ChatRequest):
         }
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# Artifact optimizer endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/optimizer/optimize")
+async def optimizer_optimize(request: OptimizationRequest):
+    """
+    Return the top N artifact builds for a character.
+
+    The optimizer scores every artifact the player has in their showcase
+    and returns the best-performing combinations based on the requested
+    target stats and optional minimum-stat constraints.
+
+    Example request body:
+    {
+        "uid": "123456789",
+        "character": "Ganyu",
+        "target_stats": {"Crit Rate": 2.0, "Crit Dmg": 1.0, "Atk Percent": 0.5},
+        "constraints": {"Crit Rate": 0.5},
+        "top_n": 5
+    }
+    """
+    try:
+        logger.info(f"Optimizer request for {request.character} (UID {request.uid})")
+        builds = await artifact_optimizer.optimize(
+            uid=request.uid,
+            character=request.character,
+            target_stats=request.target_stats or None,
+            constraints=request.constraints or None,
+            top_n=request.top_n,
+            allow_equipped=request.allow_equipped,
+        )
+        return {
+            "success": True,
+            "character": request.character,
+            "builds": [b.model_dump() for b in builds],
+            "build_count": len(builds),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in optimizer: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimizer/recommend-build")
+async def optimizer_recommend_build(request: RecommendBuildRequest):
+    """
+    Return the single recommended artifact build for a character using
+    default stat weights based on the character's role.
+
+    Example request body:
+    {
+        "uid": "123456789",
+        "character": "Ganyu"
+    }
+    """
+    try:
+        logger.info(f"Recommend build for {request.character} (UID {request.uid})")
+        build = await artifact_optimizer.recommend_build(
+            uid=request.uid,
+            character=request.character,
+        )
+        return {
+            "success": True,
+            "character": request.character,
+            "build": build.model_dump() if build else None,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in recommend-build: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/optimizer/team-optimize")
+async def optimizer_team_optimize(request: TeamOptimizeRequest):
+    """
+    Optimise artifact builds for each character in a team.
+
+    Each character is optimised independently using its default stat weights.
+
+    Example request body:
+    {
+        "uid": "123456789",
+        "team_characters": ["Ganyu", "Zhongli", "Fischl", "Kokomi"]
+    }
+    """
+    try:
+        logger.info(
+            f"Team optimize for {request.team_characters} (UID {request.uid})"
+        )
+        results = await artifact_optimizer.optimize_team(
+            uid=request.uid,
+            team_characters=request.team_characters,
+        )
+        return {
+            "success": True,
+            "team_builds": {
+                char: (build.model_dump() if build else None)
+                for char, build in results.items()
+            },
+            "timestamp": datetime.now().isoformat(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in team-optimize: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Mount frontend static files (CSS, JS, etc.) - must be after API routes
