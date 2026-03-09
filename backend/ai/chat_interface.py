@@ -8,19 +8,18 @@ class ChatInterface:
     """AI Chat interface for Genshin Impact recommendations"""
     
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize chat interface with OpenAI"""
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        """Initialize chat interface with Groq"""
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
         
         if not self.api_key:
-            logger.warning("OPENAI_API_KEY not set - chat will use mock responses")
+            logger.warning("GROQ_API_KEY not set - chat will use mock responses")
             self.client = None
         else:
             try:
-                import httpx
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.api_key, http_client=httpx.Client())
+                from groq import Groq
+                self.client = Groq(api_key=self.api_key)
             except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI: {e} - using mock responses")
+                logger.warning(f"Failed to initialize Groq: {e} - using mock responses")
                 self.client = None
         
         self.conversation_history = []
@@ -57,9 +56,9 @@ class ChatInterface:
                 "content": user_message
             })
             
-            # Get response from OpenAI
+            # Get response from Groq
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="mixtral-8x7b-32768",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     *self.conversation_history
@@ -198,7 +197,7 @@ Always format responses clearly with:
             if key in query_lower:
                 return response
         
-        return "I'm Genshin AI Coach! Ask me about team compositions, artifact farming, character builds, or Spiral Abyss strategies. (Note: OpenAI API not configured - showing template responses)"
+        return "I'm Genshin AI Coach! Ask me about team compositions, artifact farming, character builds, or Spiral Abyss strategies. (Note: Groq API not configured - showing template responses)"
     
     def clear_history(self):
         """Clear conversation history"""
