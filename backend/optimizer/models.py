@@ -1,15 +1,15 @@
 """
 Data models for the artifact optimizer.
 
-These dataclasses mirror the structures used in genshin-optimizer and the
+These dataclasses and Pydantic models mirror the structures used in genshin-optimizer and the
 Enka.Network API response so that data flows naturally between the two.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
+from typing import Dict, List, Optional, Any
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Artifact slot constants
@@ -41,6 +41,10 @@ STAT_GEO_DMG = "Geo DMG Bonus"
 STAT_DENDRO_DMG = "Dendro DMG Bonus"
 STAT_PHYSICAL_DMG = "Physical DMG Bonus"
 
+
+# ---------------------------------------------------------------------------
+# Domain Models (Dataclasses - for internal optimizer logic)
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Substat:
@@ -75,6 +79,16 @@ class Weapon:
     base_atk: float = 0.0
     sub_stat: str = ""
     sub_stat_value: float = 0.0
+
+
+@dataclass
+class Constraint:
+    """A constraint on artifact selection."""
+
+    type: str                        # "set", "main_stat", "min_stat", "max_stat"
+    slot: Optional[str] = None       # applies to which slot (None = any)
+    value: Optional[str] = None      # set key or stat name
+    threshold: Optional[float] = None  # numeric threshold for stat constraints
 
 
 @dataclass
@@ -117,22 +131,97 @@ class Build:
         }
 
 
-@dataclass
-class Constraint:
-    """A constraint on artifact selection."""
+# ---------------------------------------------------------------------------
+# Request Models (Pydantic - for API validation)
+# ---------------------------------------------------------------------------
 
-    type: str                        # "set", "main_stat", "min_stat", "max_stat"
-    slot: Optional[str] = None       # applies to which slot (None = any)
-    value: Optional[str] = None      # set key or stat name
-    threshold: Optional[float] = None  # numeric threshold for stat constraints
+class SubstatModel(BaseModel):
+    """API model for a single substat."""
+
+    stat: str
+    value: float
 
 
-@dataclass
-class OptimizationRequest:
-    """Incoming optimization request payload."""
+class ArtifactModel(BaseModel):
+    """API model for an artifact."""
 
-    uid: str
+    id: str
+    slot: str
+    set_key: str
+    rarity: int = 5
+    level: int = 20
+    main_stat: str = ""
+    main_stat_value: float = 0.0
+    substats: List[SubstatModel] = []
+    equipped_by: str = ""  # The character this artifact is currently equipped on (empty = unequipped)
+
+
+class WeaponModel(BaseModel):
+    """API model for a weapon."""
+
+    key: str
+    level: int = 90
+    ascension: int = 6
+    refinement: int = 1
+    base_atk: float = 0.0
+    sub_stat: str = ""
+    sub_stat_value: float = 0.0
+
+
+class ConstraintModel(BaseModel):
+    """API model for a constraint."""
+
+    type: str
+    slot: Optional[str] = None
+    value: Optional[str] = None
+    threshold: Optional[float] = None
+
+
+class OptimizationRequest(BaseModel):
+    """Request body for the /api/optimize endpoint."""
+
+    uid: Optional[str] = None
     character: str
-    target_stats: Dict[str, float]   # desired stat -> weight
-    constraints: List[Constraint] = field(default_factory=list)
-    top_n: int = 5
+    artifacts: List[ArtifactModel]
+    target_stats: Dict[str, float] = Field(
+        default={},
+        description=(
+            "Stat weights to optimise for. "
+            "Keys are stat names (e.g. 'Crit Rate', 'Crit DMG', 'ATK%', "
+            "'HP%', 'DEF%', 'Elemental Mastery', 'Energy Recharge'). "
+            "Values are the importance weights (higher = more important)."
+        ),
+    )
+    constraints: List[ConstraintModel] = Field(
+        default=[],
+        description=(
+            "Optional constraints on artifact selection. "
+            "Example: {'type': 'min_stat', 'value': 'Crit Rate', 'threshold': 0.5}"
+        ),
+    )
+    weapon: Optional[WeaponModel] = None
+    buffs: Optional[Dict[str, float]] = None
+    top_n: int = Field(default=5, ge=1, le=20)
+
+
+class RecommendedBuildRequest(BaseModel):
+    """Request body for /api/recommended-build."""
+
+    uid: Optional[str] = None
+    character: str
+    artifacts: List[ArtifactModel]
+    weapon: Optional[WeaponModel] = None
+    buffs: Optional[Dict[str, float]] = None
+    top_n: int = Field(default=5, ge=1, le=20)
+
+
+class OptimizeTeamRequest(BaseModel):
+    """Request body for /api/optimize-team."""
+
+    uid: Optional[str] = None
+    team: List[str] = Field(..., min_length=1, max_length=4)
+    artifacts_by_character: Dict[str, List[ArtifactModel]]
+    target_stats_by_character: Optional[Dict[str, Dict[str, float]]] = None
+    weapons_by_character: Optional[Dict[str, WeaponModel]] = None
+    buffs_by_character: Optional[Dict[str, Dict[str, float]]] = None
+    top_n: int = Field(default=3, ge=1, le=20)

@@ -251,6 +251,10 @@ DEFAULT_TARGET_STATS: Dict[str, Dict[str, float]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Artifact optimizer endpoints
+# ---------------------------------------------------------------------------
+
 @app.post("/api/optimize")
 async def optimize(request: OptimizeRequest):
     """
