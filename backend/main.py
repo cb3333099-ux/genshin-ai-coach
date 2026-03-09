@@ -2,18 +2,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
-from optimizer.models import (
-    Artifact,
-    Constraint,
-    Substat,
-    Weapon,
-)
 from optimizer.solver import optimize_artifacts
+from optimizer.models import Artifact, Substat, Weapon, Constraint
 import logging
 import os
 
@@ -55,77 +49,6 @@ app.add_middleware(
 enka_service = EnkaService()
 chat_interface = ChatInterface(api_key=_api_key)
 
-# ---------------------------------------------------------------------------
-# Request models
-# ---------------------------------------------------------------------------
-
-class ChatRequest(BaseModel):
-    query: str
-    uid: str = None
-
-
-class SubstatModel(BaseModel):
-    stat: str
-    value: float
-
-
-class ArtifactModel(BaseModel):
-    id: str
-    slot: str
-    set_key: str
-    rarity: int = 5
-    level: int = 20
-    main_stat: str
-    main_stat_value: float
-    substats: List[SubstatModel] = []
-
-
-class WeaponModel(BaseModel):
-    key: str
-    level: int = 90
-    ascension: int = 6
-    refinement: int = 1
-    base_atk: float = 0.0
-    sub_stat: str = ""
-    sub_stat_value: float = 0.0
-
-
-class ConstraintModel(BaseModel):
-    type: str
-    slot: Optional[str] = None
-    value: Optional[str] = None
-    threshold: Optional[float] = None
-
-
-class OptimizeRequest(BaseModel):
-    uid: Optional[str] = None
-    character: str
-    artifacts: List[ArtifactModel]
-    target_stats: Dict[str, float]
-    constraints: List[ConstraintModel] = []
-    weapon: Optional[WeaponModel] = None
-    buffs: Optional[Dict[str, float]] = None
-    top_n: int = 5
-
-
-class RecommendedBuildRequest(BaseModel):
-    uid: Optional[str] = None
-    character: str
-    artifacts: List[ArtifactModel]
-    weapon: Optional[WeaponModel] = None
-    buffs: Optional[Dict[str, float]] = None
-    top_n: int = 5
-
-
-class OptimizeTeamRequest(BaseModel):
-    uid: Optional[str] = None
-    team: List[str]
-    artifacts_by_character: Dict[str, List[ArtifactModel]]
-    target_stats_by_character: Optional[Dict[str, Dict[str, float]]] = None
-    weapons_by_character: Optional[Dict[str, WeaponModel]] = None
-    buffs_by_character: Optional[Dict[str, Dict[str, float]]] = None
-    top_n: int = 3
-
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
 @app.get("/")
@@ -161,7 +84,7 @@ async def get_account(uid: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: dict):
     """
     Chat with the Genshin AI Coach
     
@@ -172,22 +95,28 @@ async def chat(request: ChatRequest):
     }
     """
     try:
-        logger.info(f"Chat query: {request.query}")
+        query = request.get("query", "")
+        uid = request.get("uid")
+        
+        if not query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        logger.info(f"Chat query: {query}")
         
         # Get account data if UID provided
         account_data = None
-        if request.uid:
+        if uid:
             try:
-                account_data = await enka_service.fetch_account(request.uid)
+                account_data = await enka_service.fetch_account(uid)
             except:
                 pass  # Continue without account data
         
         # Get AI response
-        response = await chat_interface.chat(request.query, account_data)
+        response = await chat_interface.chat(query, account_data)
         
         return {
             "success": True,
-            "query": request.query,
+            "query": query,
             "response": response,
             "timestamp": datetime.now().isoformat()
         }
@@ -196,44 +125,44 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
-# Helper – convert Pydantic models to optimizer domain objects
+# Helper – convert dict to optimizer domain objects
 # ---------------------------------------------------------------------------
 
-def _to_artifact(a: ArtifactModel) -> Artifact:
+def _to_substat(s: dict) -> Substat:
+    return Substat(stat=s.get("stat", ""), value=float(s.get("value", 0)))
+
+def _to_artifact(a: dict) -> Artifact:
     return Artifact(
-        id=a.id,
-        slot=a.slot,
-        set_key=a.set_key,
-        rarity=a.rarity,
-        level=a.level,
-        main_stat=a.main_stat,
-        main_stat_value=a.main_stat_value,
-        substats=[Substat(stat=s.stat, value=s.value) for s in a.substats],
+        id=a.get("id", ""),
+        slot=a.get("slot", ""),
+        set_key=a.get("set_key", ""),
+        rarity=int(a.get("rarity", 5)),
+        level=int(a.get("level", 20)),
+        main_stat=a.get("main_stat", ""),
+        main_stat_value=float(a.get("main_stat_value", 0)),
+        substats=[_to_substat(s) for s in a.get("substats", [])],
     )
 
-
-def _to_weapon(w: Optional[WeaponModel]) -> Optional[Weapon]:
+def _to_weapon(w: Optional[dict]) -> Optional[Weapon]:
     if w is None:
         return None
     return Weapon(
-        key=w.key,
-        level=w.level,
-        ascension=w.ascension,
-        refinement=w.refinement,
-        base_atk=w.base_atk,
-        sub_stat=w.sub_stat,
-        sub_stat_value=w.sub_stat_value,
+        key=w.get("key", ""),
+        level=int(w.get("level", 90)),
+        ascension=int(w.get("ascension", 6)),
+        refinement=int(w.get("refinement", 1)),
+        base_atk=float(w.get("base_atk", 0)),
+        sub_stat=w.get("sub_stat", ""),
+        sub_stat_value=float(w.get("sub_stat_value", 0)),
     )
 
-
-def _to_constraint(c: ConstraintModel) -> Constraint:
+def _to_constraint(c: dict) -> Constraint:
     return Constraint(
-        type=c.type,
-        slot=c.slot,
-        value=c.value,
-        threshold=c.threshold,
+        type=c.get("type", ""),
+        slot=c.get("slot"),
+        value=c.get("value"),
+        threshold=c.get("threshold"),
     )
-
 
 # ---------------------------------------------------------------------------
 # Default target stats per character (used by /api/recommended-build)
@@ -250,13 +179,12 @@ DEFAULT_TARGET_STATS: Dict[str, Dict[str, float]] = {
     "_default":      {"Crit Rate": 0.60, "Crit DMG": 1.20, "ATK%": 0.40},
 }
 
-
 # ---------------------------------------------------------------------------
 # Artifact optimizer endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/api/optimize")
-async def optimize(request: OptimizeRequest):
+async def optimize(request: dict):
     """
     Find the best artifact combinations for a character.
 
@@ -269,24 +197,35 @@ async def optimize(request: OptimizeRequest):
     }
     """
     try:
-        logger.info(f"Optimizing artifacts for {request.character}")
-        domain_artifacts = [_to_artifact(a) for a in request.artifacts]
-        domain_weapon = _to_weapon(request.weapon)
-        domain_constraints = [_to_constraint(c) for c in request.constraints]
+        character = request.get("character", "")
+        artifacts_raw = request.get("artifacts", [])
+        target_stats = request.get("target_stats", {})
+        constraints_raw = request.get("constraints", [])
+        weapon_raw = request.get("weapon")
+        buffs = request.get("buffs")
+        top_n = int(request.get("top_n", 5))
+
+        if not character:
+            raise HTTPException(status_code=400, detail="Character is required")
+
+        logger.info(f"Optimizing artifacts for {character}")
+        domain_artifacts = [_to_artifact(a) for a in artifacts_raw]
+        domain_weapon = _to_weapon(weapon_raw)
+        domain_constraints = [_to_constraint(c) for c in constraints_raw]
 
         builds = optimize_artifacts(
-            character_key=request.character,
+            character_key=character,
             available_artifacts=domain_artifacts,
-            target_stats=request.target_stats,
+            target_stats=target_stats,
             constraints=domain_constraints,
             weapon=domain_weapon,
-            buffs=request.buffs,
-            top_n=request.top_n,
+            buffs=buffs,
+            top_n=top_n,
         )
 
         return {
             "success": True,
-            "character": request.character,
+            "character": character,
             "builds": [b.to_dict() for b in builds],
             "total_builds_found": len(builds),
             "timestamp": datetime.now().isoformat(),
@@ -297,7 +236,7 @@ async def optimize(request: OptimizeRequest):
 
 
 @app.post("/api/recommended-build")
-async def recommended_build(request: RecommendedBuildRequest):
+async def recommended_build(request: dict):
     """
     Optimize artifacts against community-recommended stat targets for a character.
 
@@ -309,26 +248,35 @@ async def recommended_build(request: RecommendedBuildRequest):
     }
     """
     try:
-        logger.info(f"Fetching recommended build for {request.character}")
+        character = request.get("character", "")
+        artifacts_raw = request.get("artifacts", [])
+        weapon_raw = request.get("weapon")
+        buffs = request.get("buffs")
+        top_n = int(request.get("top_n", 5))
+
+        if not character:
+            raise HTTPException(status_code=400, detail="Character is required")
+
+        logger.info(f"Fetching recommended build for {character}")
         target_stats = DEFAULT_TARGET_STATS.get(
-            request.character,
+            character,
             DEFAULT_TARGET_STATS["_default"],
         )
-        domain_artifacts = [_to_artifact(a) for a in request.artifacts]
-        domain_weapon = _to_weapon(request.weapon)
+        domain_artifacts = [_to_artifact(a) for a in artifacts_raw]
+        domain_weapon = _to_weapon(weapon_raw)
 
         builds = optimize_artifacts(
-            character_key=request.character,
+            character_key=character,
             available_artifacts=domain_artifacts,
             target_stats=target_stats,
             weapon=domain_weapon,
-            buffs=request.buffs,
-            top_n=request.top_n,
+            buffs=buffs,
+            top_n=top_n,
         )
 
         return {
             "success": True,
-            "character": request.character,
+            "character": character,
             "target_stats": target_stats,
             "builds": [b.to_dict() for b in builds],
             "total_builds_found": len(builds),
@@ -340,7 +288,7 @@ async def recommended_build(request: RecommendedBuildRequest):
 
 
 @app.post("/api/optimize-team")
-async def optimize_team(request: OptimizeTeamRequest):
+async def optimize_team(request: dict):
     """
     Optimize artifact builds for each character in a team independently.
 
@@ -354,22 +302,32 @@ async def optimize_team(request: OptimizeTeamRequest):
     }
     """
     try:
-        logger.info(f"Optimizing team: {request.team}")
+        team = request.get("team", [])
+        artifacts_by_character = request.get("artifacts_by_character", {})
+        target_stats_by_character = request.get("target_stats_by_character", {})
+        weapons_by_character = request.get("weapons_by_character", {})
+        buffs_by_character = request.get("buffs_by_character", {})
+        top_n = int(request.get("top_n", 3))
+
+        if not team:
+            raise HTTPException(status_code=400, detail="Team list is required")
+
+        logger.info(f"Optimizing team: {team}")
         team_results = {}
 
-        for character in request.team:
-            raw_artifacts = request.artifacts_by_character.get(character, [])
+        for character in team:
+            raw_artifacts = artifacts_by_character.get(character, [])
             domain_artifacts = [_to_artifact(a) for a in raw_artifacts]
 
-            target_stats = (request.target_stats_by_character or {}).get(
+            target_stats = target_stats_by_character.get(
                 character,
                 DEFAULT_TARGET_STATS.get(character, DEFAULT_TARGET_STATS["_default"]),
             )
 
-            raw_weapon = (request.weapons_by_character or {}).get(character)
+            raw_weapon = weapons_by_character.get(character)
             domain_weapon = _to_weapon(raw_weapon)
 
-            team_buffs = (request.buffs_by_character or {}).get(character)
+            team_buffs = buffs_by_character.get(character)
 
             builds = optimize_artifacts(
                 character_key=character,
@@ -377,7 +335,7 @@ async def optimize_team(request: OptimizeTeamRequest):
                 target_stats=target_stats,
                 weapon=domain_weapon,
                 buffs=team_buffs,
-                top_n=request.top_n,
+                top_n=top_n,
             )
 
             team_results[character] = {
@@ -387,7 +345,7 @@ async def optimize_team(request: OptimizeTeamRequest):
 
         return {
             "success": True,
-            "team": request.team,
+            "team": team,
             "results": team_results,
             "timestamp": datetime.now().isoformat(),
         }
