@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime
 from api.enka_service import EnkaService
@@ -38,17 +40,11 @@ class ChatRequest(BaseModel):
     query: str
     uid: str = None
 
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+
 @app.get("/")
 def read_root():
-    return {
-        "message": "Welcome to Genshin AI Coach!",
-        "status": "Online",
-        "endpoints": {
-            "health": "/health",
-            "account": "/api/account/{uid}",
-            "chat": "/api/chat",
-        }
-    }
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 @app.get("/health")
 def health_check():
@@ -111,6 +107,9 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Mount frontend static files (CSS, JS, etc.) - must be after API routes
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
