@@ -507,16 +507,23 @@ class EnkaService:
                 ]
                 artifacts.append({
                     "slot": flat.get("equipType", "").replace("EQUIP_", "").title(),
+                    # set_name holds the raw text-map hash from the Enka payload.
+                    # Kept as "set_name" for forward-facing consumers (e.g. optimizer).
+                    "set_name": flat.get("setNameTextMapHash", ""),
+                    "icon": flat.get("icon", ""),
                     "rarity": flat.get("rankLevel"),
                     "level": equip.get("reliquary", {}).get("level", 1) - 1,
-                    # Backward-compatible main_stat label (kept for existing callers)
+                    # Human-readable main stat name
                     "main_stat": main_stat_name,
-                    # New extended fields
+                    # Numeric value of main stat (for optimizer)
                     "main_stat_value": main_stat.get("statValue", 0.0),
+                    # Structured substats list (for optimizer)
                     "substats": parsed_substats,
-                    "sub_stat_count": len(sub_stats),  # kept for backward compatibility
+                    # Legacy field for backward compatibility
+                    "sub_stat_count": len(sub_stats),
+                    # Duplicate of set_name kept for backward compatibility with
+                    # existing callers that reference "set_name_hash" directly.
                     "set_name_hash": flat.get("setNameTextMapHash", ""),
-                    "icon": flat.get("icon", ""),
                 })
 
         # Parse talent/skill levels from skillLevelMap
