@@ -2,7 +2,7 @@
    Genshin AI Coach - script.js
    ================================ */
 
-const API_BASE = 'https://genshin-ai-coach.onrender.com';
+const API_BASE = 'http://localhost:8000';
 
 /* ---------- DOM refs ---------- */
 const chatMessages  = document.getElementById('chatMessages');

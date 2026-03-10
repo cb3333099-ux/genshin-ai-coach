@@ -6,90 +6,89 @@ logger = logging.getLogger(__name__)
 
 class ChatInterface:
     """AI Chat interface for Genshin Impact recommendations"""
-    
+
     def __init__(self, api_key: Optional[str] = None):
         """Initialize chat interface with Groq"""
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
         
+        # Use the api_key passed in from main.py
+        self.api_key = api_key
+
         if not self.api_key:
-            logger.warning("GROQ_API_KEY not set - chat will use mock responses")
+            logger.warning("❌ GROQ_API_KEY not found - chat will use mock responses")
             self.client = None
         else:
             try:
                 from groq import Groq
                 self.client = Groq(api_key=self.api_key)
+                logger.info("✅ Groq client initialized successfully")
             except Exception as e:
-                logger.warning(f"Failed to initialize Groq: {e} - using mock responses")
+                logger.error(f"❌ Failed to initialize Groq: {e}")
                 self.client = None
-        
+
         self.conversation_history = []
-        
+
     async def chat(self, query: str, account_data: dict = None) -> str:
-        """
-        Process user query and return AI response
-        
-        Args:
-            query: User's question
-            account_data: Optional player account data for context
-            
-        Returns:
-            AI response string
-        """
+        """Process user query and return AI response"""
         try:
+            logger.info(f"📨 Chat request received: {query[:50]}...")
+            logger.info(f"🔍 Client status: {self.client is not None}")
+            logger.info(f"🔑 API Key present: {bool(self.api_key)}")
+            
             if not self.client:
+                logger.warning("⚠️ Using mock response - Groq client not available")
                 return self._get_mock_response(query)
-            
-            # Build system prompt
+
             system_prompt = self._get_system_prompt()
-            
-            # Add context if available
             context_msg = ""
             if account_data:
                 context_msg = self._build_player_context(account_data)
-            
-            # Create user message
+
             user_message = query + context_msg
-            
-            # Add to conversation history
+
             self.conversation_history.append({
                 "role": "user",
                 "content": user_message
             })
-            
-            # Get response from Groq
-            response = self.client.chat.completions.create(
-                model="mixtral-8x7b-32768",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    *self.conversation_history
-                ],
-                max_tokens=1000,
-                temperature=0.7
-            )
-            
-            # Extract response
-            assistant_message = response.choices[0].message.content
-            
-            # Add to history
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": assistant_message
-            })
-            
-            logger.info(f"Chat response generated for query: {query}")
-            return assistant_message
-            
+
+            try:
+                logger.info("🚀 Calling Groq API with model: llama-3.1-70b-versatile...")
+                response = self.client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *self.conversation_history
+                    ],
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+
+                assistant_message = response.choices[0].message.content
+
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": assistant_message
+                })
+
+                logger.info("✅ Groq response generated successfully")
+                return assistant_message
+                
+            except Exception as api_error:
+                logger.error(f"❌ Groq API error: {str(api_error)}")
+                logger.error(f"   Error type: {type(api_error)}")
+                logger.warning("⚠️ Falling back to mock response")
+                return self._get_mock_response(query)
+
         except Exception as e:
-            logger.error(f"Error in chat interface: {str(e)}")
+            logger.error(f"❌ Error in chat interface: {str(e)}")
             return self._get_mock_response(query)
-    
+
     def _build_player_context(self, account_data: dict) -> str:
         """Build rich player context string for the AI prompt"""
         lines = ["\n\n=== PLAYER ACCOUNT DATA ==="]
         lines.append(f"Nickname: {account_data.get('nickname', 'Unknown')}")
         lines.append(f"Adventure Rank: {account_data.get('level', 'Unknown')}")
         lines.append(f"World Level: {account_data.get('world_level', 'Unknown')}")
-        
+
         abyss_floor = account_data.get("abyss_floor", 0)
         abyss_chamber = account_data.get("abyss_chamber", 0)
         if abyss_floor:
@@ -121,7 +120,6 @@ class ChatInterface:
                     char_line += f" | Friendship {friendship}"
                 lines.append(char_line)
 
-                # Weapon
                 weapon = char.get("weapon", {})
                 if weapon and weapon.get("level"):
                     w_level = weapon.get("level")
@@ -129,7 +127,6 @@ class ChatInterface:
                     w_rarity = weapon.get("rarity", "?")
                     lines.append(f"    Weapon: {w_rarity}★ | Lv.{w_level} | R{w_ref}")
 
-                # Talents
                 talents = char.get("talents", {})
                 if talents:
                     na = talents.get("normal_attack", "?")
@@ -137,7 +134,6 @@ class ChatInterface:
                     eb = talents.get("elemental_burst", "?")
                     lines.append(f"    Talents: NA:{na} / Skill:{es} / Burst:{eb}")
 
-                # Stats
                 stats = char.get("stats", {})
                 if stats:
                     stat_parts = []
@@ -145,14 +141,13 @@ class ChatInterface:
                         stat_parts.append(f"{k}:{v}")
                     lines.append(f"    Stats: {' | '.join(stat_parts)}")
 
-                # Artifacts
                 artifacts = char.get("artifacts", [])
                 if artifacts:
                     max_level = max((a.get("level", 0) for a in artifacts), default=0)
                     rarity_5 = sum(1 for a in artifacts if a.get("rarity") == 5)
                     lines.append(f"    Artifacts: {len(artifacts)} pieces | {rarity_5}x 5★ | Best: +{max_level}")
 
-        lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression. Reference character names and levels explicitly.")
+        lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression.")
         lines.append("=== END PLAYER DATA ===")
         return "\n".join(lines)
 
@@ -181,24 +176,27 @@ Always format responses clearly with:
 - Main recommendation at the top
 - Supporting details
 - Any warnings or considerations"""
-    
+
     def _get_mock_response(self, query: str) -> str:
         """Get a mock response when API is not available"""
         mock_responses = {
-            "beginner": "For beginners, I recommend focusing on Amber, Barbara, and Xiangling. They're all free characters and form a solid team. Level them up together and farm artifacts from Spiral Abyss rewards.",
-            "farm": "Today's best farming priority: Domain of Guyun for Guyun Domain artifacts (great for DPS builds). Also consider farming Talent materials for your main characters.",
-            "team": "Here are some great beginner-friendly teams:\n1. Pyro: Amber (DPS) + Xiangling (Sub-DPS) + Barbara (Healer) + Anemo (Support)\n2. Hydro: Barbara (Healer) + Xingqiu (Sub-DPS) + Fischl (Elemental Reaction) + Any DPS",
-            "abyss": "For Spiral Abyss: Focus on building two balanced teams. Team 1 should have a strong DPS with support. Team 2 should have another DPS with elemental reactions. Start with floor 1-8 for guaranteed rewards.",
+            "beginner": "For beginners, I recommend focusing on Amber, Barbara, and Xiangling. They're all free characters and form a solid team.",
+            "farm": "Today's best farming priority: Domain of Guyun for artifacts. Also farm Talent materials for your main characters.",
+            "team": "Here are great beginner teams:\n1. Pyro: Amber (DPS) + Xiangling (Sub-DPS) + Barbara (Healer)\n2. Hydro: Barbara (Healer) + Xingqiu (Sub-DPS) + Fischl",
+            "abyss": "For Spiral Abyss: Build two balanced teams with strong DPS and elemental reactions. Focus on elemental mastery for reaction damage.",
+            "hu tao": "Hu Tao is a top-tier Pyro DPS. Build her with: HP% sands, Pyro DMG goblet, Crit Rate/DMG circlet. Target 60-70% Crit Rate and 120%+ Crit DMG.",
+            "spiral": "For Spiral Abyss: Build two balanced teams with strong DPS and elemental reactions.",
+            "artifact": "Artifacts are crucial! Farm domains that match your main DPS character. Focus on main stats first, then substats.",
+            "build": "For any character, prioritize: Main DPS stat → Crit Rate/DMG → ATK% → Secondary stats based on character.",
         }
-        
-        # Find matching response
+
         query_lower = query.lower()
         for key, response in mock_responses.items():
             if key in query_lower:
                 return response
-        
-        return "I'm Genshin AI Coach! Ask me about team compositions, artifact farming, character builds, or Spiral Abyss strategies. (Note: Groq API not configured - showing template responses)"
-    
+
+        return "I'm Genshin AI Coach! Ask about team compositions, artifact farming, character builds, or Spiral Abyss strategies."
+
     def clear_history(self):
         """Clear conversation history"""
         self.conversation_history = []

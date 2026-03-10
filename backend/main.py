@@ -3,39 +3,69 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional
+from pathlib import Path
+import logging
+import os
+import sys
+
+# ------------------------------------------------
+# Load environment variables
+# ------------------------------------------------
+from dotenv import load_dotenv
+
+# Load from backend/.env first
+backend_dir = Path(__file__).parent
+env_path = backend_dir / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+
+logger = logging.getLogger(__name__)
+if env_path.exists():
+    logger.info(f"✅ Loaded .env from: {env_path}")
+else:
+    logger.warning(f"⚠️ .env not found at: {env_path}")
+
+# ------------------------------------------------
+# Project imports
+# ------------------------------------------------
 from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
 from optimizer.solver import optimize_artifacts
 from optimizer.models import Artifact, Substat, Weapon, Constraint
-import logging
-import os
 
-# Load .env file only for local development; in production (e.g. Render),
-# environment variables are already set and load_dotenv() is not needed.
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-logging.basicConfig(level=logging.INFO)
+# ------------------------------------------------
+# Logging
+# ------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Read and log API key status so it is easy to diagnose configuration issues
-_api_key = os.environ.get("GROQ_API_KEY")
-if _api_key:
-    logger.info("GROQ_API_KEY loaded successfully")
-else:
-    logger.warning("GROQ_API_KEY not found in environment variables - chat will use template responses")
+# ------------------------------------------------
+# Check GROQ API KEY
+# ------------------------------------------------
+_api_key = os.getenv("GROQ_API_KEY")
 
+if _api_key:
+    logger.info("✅ GROQ_API_KEY loaded successfully")
+    logger.info(f"   Key starts with: {_api_key[:10]}...")
+else:
+    logger.warning("⚠️ GROQ_API_KEY missing. AI responses will use template responses")
+    logger.warning(f"   Make sure .env file exists at: {env_path}")
+
+# ------------------------------------------------
+# FastAPI app
+# ------------------------------------------------
 app = FastAPI(
     title="Genshin AI Coach",
     description="Personal AI Assistant for Genshin Impact",
     version="1.0.0"
 )
 
-# Add CORS middleware
+# ------------------------------------------------
+# CORS - MUST BE FIRST MIDDLEWARE
+# ------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,94 +74,144 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize services, passing the API key explicitly so it is always sourced
-# from os.environ regardless of how load_dotenv behaves in the environment.
-enka_service = EnkaService()
-chat_interface = ChatInterface(api_key=_api_key)
+logger.info("✅ CORS middleware enabled")
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+# ------------------------------------------------
+# Services
+# ------------------------------------------------
+try:
+    enka_service = EnkaService()
+    logger.info("✅ EnkaService initialized")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize EnkaService: {e}")
+    enka_service = None
 
+try:
+    chat_interface = ChatInterface(api_key=_api_key)
+    logger.info("✅ ChatInterface initialized")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize ChatInterface: {e}")
+    chat_interface = None
+
+# ------------------------------------------------
+# Frontend directory
+# ------------------------------------------------
+FRONTEND_DIR = backend_dir.parent / "frontend"
+
+logger.info(f"Frontend directory: {FRONTEND_DIR}")
+logger.info(f"Frontend exists: {FRONTEND_DIR.exists()}")
+
+# ------------------------------------------------
+# Root
+# ------------------------------------------------
 @app.get("/")
 def read_root():
-    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+    """Serve index.html"""
+    index_path = FRONTEND_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    else:
+        logger.warning(f"index.html not found at {index_path}")
+        return {"error": "Frontend not found"}
 
+# ------------------------------------------------
+# Health check
+# ------------------------------------------------
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint"""
+    groq_ready = (chat_interface is not None and 
+                  hasattr(chat_interface, 'client') and 
+                  chat_interface.client is not None)
+    
+    return {
+        "status": "healthy",
+        "groq_configured": bool(_api_key),
+        "groq_initialized": groq_ready
+    }
 
+# ------------------------------------------------
+# Fetch account data
+# ------------------------------------------------
 @app.get("/api/account/{uid}")
 async def get_account(uid: str):
-    """
-    Fetch player account data from Enka.Network
-    
-    Example: http://127.0.0.1:8000/api/account/123456789
-    """
+    """Fetch account data from Enka Network"""
     try:
         logger.info(f"Fetching account data for UID: {uid}")
+
+        if not enka_service:
+            raise HTTPException(status_code=500, detail="EnkaService not initialized")
+
         account_data = await enka_service.fetch_account(uid)
-        
+
         return {
             "success": True,
             "data": account_data,
             "character_count": len(account_data.get("characters", [])),
             "timestamp": datetime.now().isoformat()
         }
+
     except ValueError as e:
         logger.error(f"Invalid UID: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+
     except Exception as e:
         logger.error(f"Error fetching account: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ------------------------------------------------
+# Chat with AI coach
+# ------------------------------------------------
 @app.post("/api/chat")
 async def chat(request: dict):
-    """
-    Chat with the Genshin AI Coach
-    
-    Example request:
-    {
-        "query": "What should I farm today?",
-        "uid": "123456789"
-    }
-    """
+    """Chat endpoint with AI coach"""
     try:
-        query = request.get("query", "")
+        query = request.get("query")
         uid = request.get("uid")
-        
+
         if not query:
             raise HTTPException(status_code=400, detail="Query is required")
-        
-        logger.info(f"Chat query: {query}")
-        
-        # Get account data if UID provided
+
+        logger.info(f"Chat query: {query[:50]}...")
+
         account_data = None
+
         if uid:
             try:
-                account_data = await enka_service.fetch_account(uid)
-            except:
-                pass  # Continue without account data
-        
-        # Get AI response
-        response = await chat_interface.chat(query, account_data)
-        
+                logger.info(f"Fetching account data for UID: {uid}")
+                if enka_service:
+                    account_data = await enka_service.fetch_account(uid)
+            except Exception as e:
+                logger.warning(f"Failed to fetch account data: {e}")
+
+        # Get response from chat interface
+        if chat_interface:
+            response = await chat_interface.chat(query, account_data)
+        else:
+            logger.warning("ChatInterface not initialized, using fallback")
+            response = "Chat interface not available. Please check server logs."
+
         return {
             "success": True,
             "query": query,
             "response": response,
             "timestamp": datetime.now().isoformat()
         }
+
     except Exception as e:
-        logger.error(f"Error in chat: {str(e)}")
+        logger.error(f"Error in chat endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------------------------------------------------------------------
-# Helper – convert dict to optimizer domain objects
-# ---------------------------------------------------------------------------
-
+# ------------------------------------------------
+# Helper conversion functions
+# ------------------------------------------------
 def _to_substat(s: dict) -> Substat:
+    """Convert dict to Substat"""
     return Substat(stat=s.get("stat", ""), value=float(s.get("value", 0)))
 
+
 def _to_artifact(a: dict) -> Artifact:
+    """Convert dict to Artifact"""
     return Artifact(
         id=a.get("id", ""),
         slot=a.get("slot", ""),
@@ -143,9 +223,12 @@ def _to_artifact(a: dict) -> Artifact:
         substats=[_to_substat(s) for s in a.get("substats", [])],
     )
 
+
 def _to_weapon(w: Optional[dict]) -> Optional[Weapon]:
-    if w is None:
+    """Convert dict to Weapon"""
+    if not w:
         return None
+
     return Weapon(
         key=w.get("key", ""),
         level=int(w.get("level", 90)),
@@ -156,7 +239,9 @@ def _to_weapon(w: Optional[dict]) -> Optional[Weapon]:
         sub_stat_value=float(w.get("sub_stat_value", 0)),
     )
 
+
 def _to_constraint(c: dict) -> Constraint:
+    """Convert dict to Constraint"""
     return Constraint(
         type=c.get("type", ""),
         slot=c.get("slot"),
@@ -164,44 +249,31 @@ def _to_constraint(c: dict) -> Constraint:
         threshold=c.get("threshold"),
     )
 
-# ---------------------------------------------------------------------------
-# Default target stats per character (used by /api/recommended-build)
-# Based on community-accepted optimal build targets.
-# ---------------------------------------------------------------------------
-
+# ------------------------------------------------
+# Default target stats
+# ------------------------------------------------
 DEFAULT_TARGET_STATS: Dict[str, Dict[str, float]] = {
-    "Ganyu":         {"Crit Rate": 0.70, "Crit DMG": 1.40, "ATK%": 0.50},
-    "Hu Tao":        {"Crit Rate": 0.65, "Crit DMG": 1.30, "HP%": 0.50},
+    "Ganyu": {"Crit Rate": 0.70, "Crit DMG": 1.40, "ATK%": 0.50},
+    "Hu Tao": {"Crit Rate": 0.65, "Crit DMG": 1.30, "HP%": 0.50},
     "Raiden Shogun": {"Energy Recharge": 2.00, "Crit Rate": 0.55, "Crit DMG": 1.10},
-    "Zhongli":       {"HP%": 0.50, "DEF%": 0.30},
-    "Kazuha":        {"Elemental Mastery": 800.0, "Energy Recharge": 1.60},
-    "Nahida":        {"Elemental Mastery": 900.0, "Crit Rate": 0.55, "Crit DMG": 1.10},
-    "_default":      {"Crit Rate": 0.60, "Crit DMG": 1.20, "ATK%": 0.40},
+    "Zhongli": {"HP%": 0.50, "DEF%": 0.30},
+    "Kazuha": {"Elemental Mastery": 800.0, "Energy Recharge": 1.60},
+    "Nahida": {"Elemental Mastery": 900.0, "Crit Rate": 0.55, "Crit DMG": 1.10},
+    "_default": {"Crit Rate": 0.60, "Crit DMG": 1.20, "ATK%": 0.40},
 }
 
-# ---------------------------------------------------------------------------
-# Artifact optimizer endpoints
-# ---------------------------------------------------------------------------
-
+# ------------------------------------------------
+# Artifact optimizer endpoint
+# ------------------------------------------------
 @app.post("/api/optimize")
 async def optimize(request: dict):
-    """
-    Find the best artifact combinations for a character.
-
-    Example request:
-    {
-        "character": "Ganyu",
-        "artifacts": [...],
-        "target_stats": {"Crit Rate": 0.7, "Crit DMG": 1.4},
-        "top_n": 5
-    }
-    """
+    """Optimize artifact builds"""
     try:
-        character = request.get("character", "")
+        character = request.get("character")
         artifacts_raw = request.get("artifacts", [])
         target_stats = request.get("target_stats", {})
-        constraints_raw = request.get("constraints", [])
         weapon_raw = request.get("weapon")
+        constraints_raw = request.get("constraints", [])
         buffs = request.get("buffs")
         top_n = int(request.get("top_n", 5))
 
@@ -209,18 +281,19 @@ async def optimize(request: dict):
             raise HTTPException(status_code=400, detail="Character is required")
 
         logger.info(f"Optimizing artifacts for {character}")
-        domain_artifacts = [_to_artifact(a) for a in artifacts_raw]
-        domain_weapon = _to_weapon(weapon_raw)
-        domain_constraints = [_to_constraint(c) for c in constraints_raw]
+
+        artifacts = [_to_artifact(a) for a in artifacts_raw]
+        weapon = _to_weapon(weapon_raw)
+        constraints = [_to_constraint(c) for c in constraints_raw]
 
         builds = optimize_artifacts(
             character_key=character,
-            available_artifacts=domain_artifacts,
+            available_artifacts=artifacts,
             target_stats=target_stats,
-            constraints=domain_constraints,
-            weapon=domain_weapon,
+            constraints=constraints,
+            weapon=weapon,
             buffs=buffs,
-            top_n=top_n,
+            top_n=top_n
         )
 
         return {
@@ -228,135 +301,44 @@ async def optimize(request: dict):
             "character": character,
             "builds": [b.to_dict() for b in builds],
             "total_builds_found": len(builds),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat()
         }
+
     except Exception as e:
-        logger.error(f"Error optimizing artifacts: {str(e)}")
+        logger.error(f"Optimization error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ------------------------------------------------
+# Static frontend
+# ------------------------------------------------
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
 
-@app.post("/api/recommended-build")
-async def recommended_build(request: dict):
-    """
-    Optimize artifacts against community-recommended stat targets for a character.
+logger.info(f"✅ Static files mounted from: {FRONTEND_DIR}")
 
-    Example request:
-    {
-        "character": "Ganyu",
-        "artifacts": [...],
-        "top_n": 3
-    }
-    """
-    try:
-        character = request.get("character", "")
-        artifacts_raw = request.get("artifacts", [])
-        weapon_raw = request.get("weapon")
-        buffs = request.get("buffs")
-        top_n = int(request.get("top_n", 5))
+# ------------------------------------------------
+# Startup event
+# ------------------------------------------------
+@app.on_event("startup")
+async def startup_event():
+    """Run on startup"""
+    logger.info("=" * 60)
+    logger.info("🚀 GENSHIN AI COACH - STARTING UP")
+    logger.info("=" * 60)
+    logger.info(f"Frontend Dir: {FRONTEND_DIR}")
+    logger.info(f"GROQ API Key: {'✅ Configured' if _api_key else '❌ Missing'}")
+    logger.info(f"Chat Interface: {'✅ Ready' if chat_interface else '❌ Failed'}")
+    logger.info("=" * 60)
 
-        if not character:
-            raise HTTPException(status_code=400, detail="Character is required")
-
-        logger.info(f"Fetching recommended build for {character}")
-        target_stats = DEFAULT_TARGET_STATS.get(
-            character,
-            DEFAULT_TARGET_STATS["_default"],
-        )
-        domain_artifacts = [_to_artifact(a) for a in artifacts_raw]
-        domain_weapon = _to_weapon(weapon_raw)
-
-        builds = optimize_artifacts(
-            character_key=character,
-            available_artifacts=domain_artifacts,
-            target_stats=target_stats,
-            weapon=domain_weapon,
-            buffs=buffs,
-            top_n=top_n,
-        )
-
-        return {
-            "success": True,
-            "character": character,
-            "target_stats": target_stats,
-            "builds": [b.to_dict() for b in builds],
-            "total_builds_found": len(builds),
-            "timestamp": datetime.now().isoformat(),
-        }
-    except Exception as e:
-        logger.error(f"Error getting recommended build: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/optimize-team")
-async def optimize_team(request: dict):
-    """
-    Optimize artifact builds for each character in a team independently.
-
-    Example request:
-    {
-        "team": ["Ganyu", "Zhongli", "Fischl", "Kokomi"],
-        "artifacts_by_character": {
-            "Ganyu": [...],
-            "Zhongli": [...]
-        }
-    }
-    """
-    try:
-        team = request.get("team", [])
-        artifacts_by_character = request.get("artifacts_by_character", {})
-        target_stats_by_character = request.get("target_stats_by_character", {})
-        weapons_by_character = request.get("weapons_by_character", {})
-        buffs_by_character = request.get("buffs_by_character", {})
-        top_n = int(request.get("top_n", 3))
-
-        if not team:
-            raise HTTPException(status_code=400, detail="Team list is required")
-
-        logger.info(f"Optimizing team: {team}")
-        team_results = {}
-
-        for character in team:
-            raw_artifacts = artifacts_by_character.get(character, [])
-            domain_artifacts = [_to_artifact(a) for a in raw_artifacts]
-
-            target_stats = target_stats_by_character.get(
-                character,
-                DEFAULT_TARGET_STATS.get(character, DEFAULT_TARGET_STATS["_default"]),
-            )
-
-            raw_weapon = weapons_by_character.get(character)
-            domain_weapon = _to_weapon(raw_weapon)
-
-            team_buffs = buffs_by_character.get(character)
-
-            builds = optimize_artifacts(
-                character_key=character,
-                available_artifacts=domain_artifacts,
-                target_stats=target_stats,
-                weapon=domain_weapon,
-                buffs=team_buffs,
-                top_n=top_n,
-            )
-
-            team_results[character] = {
-                "target_stats": target_stats,
-                "builds": [b.to_dict() for b in builds],
-            }
-
-        return {
-            "success": True,
-            "team": team,
-            "results": team_results,
-            "timestamp": datetime.now().isoformat(),
-        }
-    except Exception as e:
-        logger.error(f"Error optimizing team: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Mount frontend static files (CSS, JS, etc.) - must be after API routes
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
-
+# ------------------------------------------------
+# Run locally
+# ------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+    logger.info("Starting Uvicorn server...")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8000,
+        reload=True
+    )
