@@ -374,8 +374,8 @@ async def optimize_team(request: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Mount frontend static files (CSS, JS, etc.) - must be after API routes
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+# Mount frontend static files (CSS, JS, etc.) - must be AFTER all API routes!
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
