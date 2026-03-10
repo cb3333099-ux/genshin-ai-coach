@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from api.enka_service import EnkaService
@@ -52,8 +52,28 @@ chat_interface = ChatInterface(api_key=_api_key)
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
 @app.get("/")
-def read_root():
-    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+async def read_root():
+    """Serve the frontend HTML with proper CSP headers"""
+    try:
+        file_path = os.path.join(FRONTEND_DIR, "index.html")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        return HTMLResponse(
+            content=html_content,
+            headers={
+                "Content-Security-Policy": "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:",
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "SAMEORIGIN",
+                "X-XSS-Protection": "1; mode=block"
+            }
+        )
+    except FileNotFoundError:
+        logger.error(f"index.html not found at {FRONTEND_DIR}")
+        return HTMLResponse("<h1>Frontend files not found</h1>", status_code=500)
+    except Exception as e:
+        logger.error(f"Error reading index.html: {e}")
+        return HTMLResponse(f"<h1>Error loading page</h1><p>{str(e)}</p>", status_code=500)
 
 @app.get("/health")
 def health_check():
@@ -355,7 +375,7 @@ async def optimize_team(request: dict):
 
 
 # Mount frontend static files (CSS, JS, etc.) - must be after API routes
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 if __name__ == "__main__":
     import uvicorn
