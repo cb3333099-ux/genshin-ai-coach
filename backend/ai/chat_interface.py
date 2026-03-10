@@ -51,7 +51,7 @@ class ChatInterface:
             })
 
             try:
-                logger.info("🚀 Calling Groq API with model: llama-3.1-70b-versatile...")
+                logger.info("🚀 Calling Groq API with model: llama-3.3-70b-versatile...")
                 response = self.client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
