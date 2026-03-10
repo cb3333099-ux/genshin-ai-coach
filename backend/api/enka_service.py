@@ -70,17 +70,27 @@ class EnkaService:
 
     async def _ensure_character_data(self) -> None:
         """
-        Build the class-level character database by combining two sources:
-          1. Enka Network characters.json – provides the numeric avatar IDs we
-             need to resolve Enka API payloads.
-          2. genshin.dev API – always up-to-date; provides element, rarity,
-             weapon type and nation for every current character.
-        Both fetches are attempted in parallel; if either fails the other's
-        data is still used.  The built-in fallback dict is the last resort.
+        Build the class-level character database by combining:
+          1. Built-in fallback – always used as the base so common characters
+             always resolve to real names even when external APIs are unavailable.
+          2. Enka Network characters.json – supplements the fallback with newer
+             characters not yet in the built-in list (IDs added each patch).
+          3. genshin.dev API – enriches entries with rarity, weapon type and
+             nation metadata.
+        The fallback is the authoritative source for character names; dynamic
+        data from Enka is only added for character IDs that are absent from the
+        fallback, and only when the returned name looks like a real display name
+        (not a numeric TextMap hash).
         """
         age = time.time() - EnkaService._character_db_loaded_at
         if EnkaService._character_db and age < self.CHARACTER_CACHE_DURATION:
             return
+
+        # Always start from the built-in fallback so known characters resolve
+        # correctly regardless of external API availability.
+        merged_db: Dict[int, Dict[str, Any]] = {
+            k: v.copy() for k, v in self._builtin_character_fallback().items()
+        }
 
         # Fetch both sources concurrently; return_exceptions=True lets one failure
         # not block the other from succeeding.
@@ -92,30 +102,40 @@ class EnkaService:
         enka_db = results[0] if not isinstance(results[0], BaseException) else {}
         genshin_dev_db = results[1] if not isinstance(results[1], BaseException) else {}
 
-        # Merge genshin.dev data into the Enka DB by matching on normalised name.
-        # genshin.dev supplies element/rarity/weapon/region; Enka supplies the ID.
-        if enka_db and genshin_dev_db:
-            for char_info in enka_db.values():
-                key = self._normalize_name(char_info["name"])
+        # Add characters from Enka that are not yet in the fallback.
+        # Only accept entries whose name looks like a real display name (not a
+        # numeric TextMap hash or a bare "Character <id>" placeholder).
+        if enka_db:
+            for char_id, char_info in enka_db.items():
+                name = char_info.get("name", "").strip()
+                name_is_valid = (
+                    len(name) >= 2
+                    and not name.isdigit()
+                    and not name.startswith("Character ")
+                )
+                if char_id not in merged_db and name_is_valid:
+                    merged_db[char_id] = char_info.copy()
+
+        # Enrich every entry with genshin.dev metadata (element, rarity, weapon,
+        # region) by matching on the normalised character name.
+        if genshin_dev_db:
+            for char_info in merged_db.values():
+                name = char_info.get("name", "")
+                if not name:
+                    continue
+                key = self._normalize_name(name)
                 dev = genshin_dev_db.get(key)
                 if dev:
-                    # genshin.dev's element names ("Hydro", "Cryo", …) are already
-                    # in the friendly format we use, so prefer them over Enka's.
+                    # genshin.dev element names ("Hydro", "Cryo", …) are already
+                    # in the friendly format we use, so prefer them.
                     char_info["element"] = dev.get("element") or char_info.get("element", "Unknown")
                     char_info.setdefault("rarity", dev.get("rarity"))
                     char_info.setdefault("weapon", dev.get("weapon"))
                     char_info.setdefault("region", dev.get("region"))
 
-        new_db = enka_db or {}
-
-        if new_db:
-            EnkaService._character_db = new_db
-            EnkaService._character_db_loaded_at = time.time()
-            logger.info(f"Loaded {len(new_db)} characters into character database")
-        elif not EnkaService._character_db:
-            EnkaService._character_db = self._builtin_character_fallback()
-            EnkaService._character_db_loaded_at = time.time()
-            logger.info("Using built-in character fallback database")
+        EnkaService._character_db = merged_db
+        EnkaService._character_db_loaded_at = time.time()
+        logger.info(f"Loaded {len(merged_db)} characters into character database")
 
     async def _fetch_enka_characters(self) -> Dict[int, Dict[str, str]]:
         """Fetch avatar ID → name/element mapping from Enka Network characters.json."""
@@ -231,8 +251,9 @@ class EnkaService:
     @staticmethod
     def _builtin_character_fallback() -> Dict[int, Dict[str, str]]:
         """
-        Minimal hard-coded fallback using correct Enka avatar IDs.
-        Only used when the live characters.json cannot be reached.
+        Hard-coded fallback mapping of Enka avatar IDs to character names.
+        Used as the authoritative base so common characters always resolve to
+        their real names even when external APIs are unreachable.
         Character IDs sourced from Enka Network API documentation.
         """
         return {
@@ -252,13 +273,13 @@ class EnkaService:
             10000025: {"name": "Xingqiu",          "element": "Hydro"},
             10000026: {"name": "Xiao",              "element": "Anemo"},
             10000027: {"name": "Ningguang",        "element": "Geo"},
+            10000028: {"name": "Jean",             "element": "Anemo"},
             10000029: {"name": "Klee",              "element": "Pyro"},
             10000030: {"name": "Zhongli",          "element": "Geo"},
             10000031: {"name": "Fischl",           "element": "Electro"},
             10000032: {"name": "Bennett",          "element": "Pyro"},
             10000033: {"name": "Tartaglia",        "element": "Hydro"},
             10000034: {"name": "Noelle",           "element": "Geo"},
-            10000035: {"name": "Qiqi",             "element": "Cryo"},
             10000036: {"name": "Chongyun",         "element": "Cryo"},
             10000037: {"name": "Ganyu",            "element": "Cryo"},
             10000038: {"name": "Albedo",           "element": "Geo"},
