@@ -17,7 +17,7 @@ class ChatInterface:
         else:
             try:
                 from groq import Groq
-                # Initialize Groq client without problematic parameters
+                # Initialize Groq client - simplified for Python 3.14 compatibility
                 self.client = Groq(api_key=self.api_key)
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq: {e} - using mock responses")
