@@ -147,6 +147,23 @@ class ChatInterface:
                     rarity_5 = sum(1 for a in artifacts if a.get("rarity") == 5)
                     lines.append(f"    Artifacts: {len(artifacts)} pieces | {rarity_5}x 5★ | Best: +{max_level}")
 
+                build_analysis = char.get("build_analysis")
+                if build_analysis:
+                    score = build_analysis.get("total_score", 0)
+                    grade = build_analysis.get("grade", "")
+                    set_summary = build_analysis.get("set_summary", "")
+                    role = build_analysis.get("role", "")
+                    lines.append(f"    Build Quality: {score}/10 ({grade}) | Role: {role}")
+                    if set_summary:
+                        lines.append(f"    Artifact Set: {set_summary}")
+                    main_stats = build_analysis.get("main_stats", {})
+                    if main_stats:
+                        ms_parts = [f"{k.title()}: {v}" for k, v in main_stats.items()]
+                        lines.append(f"    Main Stats: {' | '.join(ms_parts)}")
+                    recs = build_analysis.get("recommendations", [])
+                    if recs:
+                        lines.append(f"    Build Tips: {recs[0]}")
+
         lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression.")
         lines.append("=== END PLAYER DATA ===")
         return "\n".join(lines)
