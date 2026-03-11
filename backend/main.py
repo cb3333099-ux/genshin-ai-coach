@@ -52,6 +52,22 @@ logger.info("✅ EnkaService initialized")
 enka_service = EnkaService()
 chat_interface = ChatInterface(api_key=_api_key)
 
+@app.on_event("startup")
+async def _preload_datasets():
+    """Pre-warm character and artifact databases on startup to reduce first-request latency."""
+    logger.info("🔄 Pre-loading character dataset (Enka + genshin.dev + jmsszkzlz)...")
+    try:
+        await enka_service._ensure_character_data()
+        logger.info("✅ Character dataset loaded successfully")
+    except Exception as exc:
+        logger.warning(f"⚠️ Character dataset pre-load failed (will retry on first request): {exc}")
+    logger.info("🔄 Pre-loading artifact set name database...")
+    try:
+        await enka_service._ensure_artifact_data()
+        logger.info("✅ Artifact set database loaded successfully")
+    except Exception as exc:
+        logger.warning(f"⚠️ Artifact set database pre-load failed (will retry on first request): {exc}")
+
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
 @app.get("/")
