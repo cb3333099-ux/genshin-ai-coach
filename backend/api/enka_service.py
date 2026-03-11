@@ -41,6 +41,11 @@ class EnkaService:
     ENKA_CHARACTERS_URL = (
         "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/characters.json"
     )
+    # Enka Network localisation file – maps NameTextMapHash values to English
+    # display names.  Required to resolve character names from characters.json.
+    ENKA_LOC_URL = (
+        "https://raw.githubusercontent.com/EnkaNetwork/API-docs/master/store/loc.json"
+    )
     # genshin.dev API – always up-to-date, provides element/rarity/weapon/region.
     # Response: list of objects with fields: name, vision (element), rarity,
     # weapon, nation (region), title, gender, affiliation, constellation, etc.
@@ -135,7 +140,7 @@ class EnkaService:
         "Blizzard Strayer": {
             "2piece": "Cryo DMG Bonus +15%",
             "4piece": "When a character attacks an enemy affected by Cryo, their Crit Rate is increased by 20%. If the enemy is Frozen, Crit Rate is increased by an additional 20%.",
-            "ideal_for": ["Ganyu", "Ayaka", "Wriothesley", "Citlali"],
+            "ideal_for": ["Ganyu", "Kamisato Ayaka", "Wriothesley", "Citlali"],
             "element": "Cryo",
         },
         "Thundering Fury": {
@@ -147,7 +152,7 @@ class EnkaService:
         "Viridescent Venerer": {
             "2piece": "Anemo DMG Bonus +15%",
             "4piece": "Increases Swirl DMG by 60%. Decreases opponent's Elemental RES to the element infused in the Swirl by 40% for 10s.",
-            "ideal_for": ["Kazuha", "Sucrose", "Venti", "Wanderer", "Jean", "Faruzan", "Xianyun", "Lan Yan"],
+            "ideal_for": ["Kaedehara Kazuha", "Sucrose", "Venti", "Wanderer", "Jean", "Faruzan", "Xianyun", "Lan Yan"],
             "element": "Anemo",
         },
         "Emblem of Severed Fate": {
@@ -183,7 +188,7 @@ class EnkaService:
         "Marechaussee Hunter": {
             "2piece": "Normal and Charged Attack DMG +15%",
             "4piece": "When current HP increases or decreases, Crit Rate is increased by 12% for 5s. Max 3 stacks.",
-            "ideal_for": ["Hu Tao", "Furina", "Neuvilette", "Lyney"],
+            "ideal_for": ["Hu Tao", "Furina", "Neuvillette", "Lyney"],
             "element": "Any",
         },
         "Golden Troupe": {
@@ -237,7 +242,7 @@ class EnkaService:
         "Long Night's Oath": {
             "2piece": "HP +20%",
             "4piece": "Increases Charged Attack DMG based on the equipping character's Max HP.",
-            "ideal_for": ["Neuvilette", "Sigewinne"],
+            "ideal_for": ["Neuvillette", "Sigewinne"],
             "element": "Hydro",
         },
     }
@@ -286,7 +291,7 @@ class EnkaService:
             "ideal_substats": ["Elemental Mastery", "Crit Rate", "Crit DMG", "ATK%"],
             "role": "Sub-DPS / Support",
         },
-        "Kazuha": {
+        "Kaedehara Kazuha": {
             "artifact_sets": ["Viridescent Venerer"],
             "main_stats": {
                 "sands": ["Elemental Mastery"],
@@ -336,7 +341,7 @@ class EnkaService:
             "ideal_substats": ["HP%", "Crit Rate", "Crit DMG", "Energy Recharge"],
             "role": "Support",
         },
-        "Neuvilette": {
+        "Neuvillette": {
             "artifact_sets": ["Marechaussee Hunter", "Long Night's Oath"],
             "main_stats": {
                 "sands": ["HP%"],
@@ -573,37 +578,81 @@ class EnkaService:
         logger.info(f"✅ Loaded {len(merged_db)} characters into character database")
 
     async def _fetch_enka_characters(self) -> Dict[int, Dict[str, str]]:
-        """Fetch avatar ID → name/element mapping from Enka Network characters.json."""
+        """
+        Fetch avatar ID → name/element mapping from Enka Network.
+
+        Enka's characters.json stores character names as numeric TextMap hashes
+        (NameTextMapHash), not plain strings.  The English display names are
+        resolved by looking up those hashes in the loc.json localisation file.
+        Both files are fetched concurrently to keep startup latency low.
+        """
+        headers = {"User-Agent": "GenshinAICoach/1.0"}
+        timeout = aiohttp.ClientTimeout(total=15)
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    self.ENKA_CHARACTERS_URL,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                    headers={"User-Agent": "GenshinAICoach/1.0"},
-                ) as response:
-                    if response.status == 200:
-                        raw = await response.json(content_type=None)
-                        new_db: Dict[int, Dict[str, str]] = {}
-                        for key, info in raw.items():
-                            # Key format: "10000002-02" (avatar_id-costume_id)
-                            char_id = int(key.split("-")[0])
-                            if char_id not in new_db:
-                                element_code = info.get("Element", "")
-                                new_db[char_id] = {
-                                    "name": info.get("NameText", f"Character {char_id}"),
-                                    "element": self.ELEMENT_MAP.get(element_code, "Unknown"),
-                                }
-                        logger.info(
-                            f"Loaded {len(new_db)} characters from Enka character database"
-                        )
-                        return new_db
-                    else:
-                        logger.warning(
-                            f"Enka characters.json returned HTTP {response.status}"
-                        )
+                # Fetch characters.json and loc.json concurrently
+                results = await asyncio.gather(
+                    self._get_json_url(session, self.ENKA_CHARACTERS_URL, timeout, headers),
+                    self._get_json_url(session, self.ENKA_LOC_URL, timeout, headers),
+                    return_exceptions=True,
+                )
+            chars_raw = results[0] if isinstance(results[0], dict) else None
+            loc_raw = results[1] if isinstance(results[1], dict) else None
+
+            if not chars_raw and not loc_raw:
+                logger.warning("Both Enka characters.json and loc.json fetches failed; "
+                               "character names will rely on built-in fallback only.")
+                return {}
+            if not chars_raw:
+                logger.warning("Enka characters.json fetch failed or returned empty data")
+                return {}
+            if not loc_raw:
+                logger.warning("Enka loc.json fetch failed or returned empty data; "
+                               "character names will rely on built-in fallback only.")
+                return {}
+
+            # Build NameTextMapHash → English name lookup from loc.json
+            en_map: Dict[str, str] = loc_raw.get("en", {})
+
+            new_db: Dict[int, Dict[str, str]] = {}
+            for key, info in chars_raw.items():
+                # Key format: "10000002" or "10000002-02" (avatar_id[-costume_id])
+                try:
+                    char_id = int(key.split("-")[0])
+                except (ValueError, IndexError):
+                    continue
+                if char_id in new_db:
+                    continue
+                element_code = info.get("Element", "")
+                # Resolve the display name via the English TextMap
+                name_hash = str(info.get("NameTextMapHash", ""))
+                name = en_map.get(name_hash, "")
+                if not name:
+                    continue
+                new_db[char_id] = {
+                    "name": name,
+                    "element": self.ELEMENT_MAP.get(element_code, "Unknown"),
+                }
+            logger.info(
+                f"Loaded {len(new_db)} characters from Enka character database"
+            )
+            return new_db
         except Exception as exc:
             logger.warning(f"Could not fetch Enka character database: {exc}")
         return {}
+
+    @staticmethod
+    async def _get_json_url(
+        session: aiohttp.ClientSession,
+        url: str,
+        timeout: aiohttp.ClientTimeout,
+        headers: dict,
+    ):
+        """Fetch a URL and return its JSON body, or raise on error."""
+        async with session.get(url, timeout=timeout, headers=headers) as response:
+            if response.status != 200:
+                raise RuntimeError(f"HTTP {response.status} from {url}")
+            return await response.json(content_type=None)
 
     async def _load_character_database_from_api(self) -> Dict[str, Dict]:
         """
@@ -1004,110 +1053,132 @@ class EnkaService:
         Hard-coded fallback mapping of Enka avatar IDs to character names.
         Used as the authoritative base so common characters always resolve to
         their real names even when external APIs are unreachable.
-        Character IDs sourced from Enka Network API documentation.
+
+        Character IDs and names verified against the Enka Network characters.json
+        and loc.json (English TextMap) files.  The previous version of this list
+        had a large off-by-one shift starting at ID 10000061 (e.g. Kirara was
+        mapped to Aloy's ID, Furina to Chevreuse's ID, etc.).  This version
+        contains the correct mappings sourced directly from Enka's API data.
+
+        Note on full vs. short names: Enka returns the game's official English
+        names (e.g. "Kaedehara Kazuha", "Sangonomiya Kokomi").  These match the
+        keys used in OPTIMAL_BUILDS so build analysis resolves correctly.
         """
         return {
-            10000002: {"name": "Kamisato Ayaka",   "element": "Cryo"},
-            10000003: {"name": "Qiqi",              "element": "Cryo"},
-            10000005: {"name": "Traveler",          "element": "Anemo"},
-            10000006: {"name": "Lisa",              "element": "Electro"},
-            10000007: {"name": "Traveler",          "element": "Anemo"},
-            10000014: {"name": "Barbara",           "element": "Hydro"},
-            10000015: {"name": "Kaeya",             "element": "Cryo"},
-            10000016: {"name": "Diluc",             "element": "Pyro"},
-            10000020: {"name": "Razor",             "element": "Electro"},
-            10000021: {"name": "Amber",             "element": "Pyro"},
-            10000022: {"name": "Venti",             "element": "Anemo"},
-            10000023: {"name": "Xiangling",        "element": "Pyro"},
-            10000024: {"name": "Beidou",            "element": "Electro"},
-            10000025: {"name": "Xingqiu",          "element": "Hydro"},
-            10000026: {"name": "Xiao",              "element": "Anemo"},
-            10000027: {"name": "Ningguang",        "element": "Geo"},
-            10000028: {"name": "Jean",             "element": "Anemo"},
-            10000029: {"name": "Klee",              "element": "Pyro"},
-            10000030: {"name": "Zhongli",          "element": "Geo"},
-            10000031: {"name": "Fischl",           "element": "Electro"},
-            10000032: {"name": "Bennett",          "element": "Pyro"},
-            10000033: {"name": "Tartaglia",        "element": "Hydro"},
-            10000034: {"name": "Noelle",           "element": "Geo"},
-            10000036: {"name": "Chongyun",         "element": "Cryo"},
-            10000037: {"name": "Ganyu",            "element": "Cryo"},
-            10000038: {"name": "Albedo",           "element": "Geo"},
-            10000039: {"name": "Diona",            "element": "Cryo"},
-            10000041: {"name": "Mona",             "element": "Hydro"},
-            10000042: {"name": "Keqing",           "element": "Electro"},
-            10000043: {"name": "Sucrose",          "element": "Anemo"},
-            10000044: {"name": "Xinyan",           "element": "Pyro"},
-            10000045: {"name": "Rosaria",          "element": "Cryo"},
-            10000046: {"name": "Hu Tao",           "element": "Pyro"},
-            10000047: {"name": "Kazuha",           "element": "Anemo"},
-            10000048: {"name": "Yanfei",           "element": "Pyro"},
-            10000049: {"name": "Yoimiya",          "element": "Pyro"},
-            10000050: {"name": "Thoma",            "element": "Pyro"},
-            10000051: {"name": "Eula",             "element": "Cryo"},
-            10000052: {"name": "Raiden Shogun",    "element": "Electro"},
-            10000053: {"name": "Sayu",             "element": "Anemo"},
-            10000054: {"name": "Kokomi",           "element": "Hydro"},
-            10000055: {"name": "Gorou",            "element": "Geo"},
-            10000056: {"name": "Sara",             "element": "Electro"},
-            10000057: {"name": "Itto",             "element": "Geo"},
-            10000058: {"name": "Yae Miko",         "element": "Electro"},
-            10000059: {"name": "Heizou",           "element": "Anemo"},
-            10000060: {"name": "Yelan",            "element": "Hydro"},
-            10000061: {"name": "Aloy",             "element": "Cryo"},
-            10000062: {"name": "Shenhe",           "element": "Cryo"},
-            10000063: {"name": "Yun Jin",          "element": "Geo"},
-            10000064: {"name": "Kuki Shinobu",     "element": "Electro"},
-            10000065: {"name": "Kamisato Ayato",   "element": "Hydro"},
-            10000066: {"name": "Collei",           "element": "Dendro"},
-            10000067: {"name": "Dori",             "element": "Electro"},
-            10000068: {"name": "Tighnari",         "element": "Dendro"},
-            10000069: {"name": "Nilou",            "element": "Hydro"},
-            10000070: {"name": "Cyno",             "element": "Electro"},
-            10000071: {"name": "Candace",          "element": "Hydro"},
-            10000072: {"name": "Nahida",           "element": "Dendro"},
-            10000073: {"name": "Layla",            "element": "Cryo"},
-            10000074: {"name": "Wanderer",         "element": "Anemo"},
-            10000075: {"name": "Faruzan",          "element": "Anemo"},
-            10000076: {"name": "Yaoyao",           "element": "Dendro"},
-            10000077: {"name": "Alhaitham",        "element": "Dendro"},
-            10000078: {"name": "Dehya",            "element": "Pyro"},
-            10000079: {"name": "Mika",             "element": "Cryo"},
-            10000080: {"name": "Kaveh",            "element": "Dendro"},
-            10000081: {"name": "Baizhu",           "element": "Dendro"},
-            10000082: {"name": "Lynette",          "element": "Anemo"},
-            10000083: {"name": "Lyney",            "element": "Pyro"},
-            10000084: {"name": "Freminet",         "element": "Cryo"},
-            10000085: {"name": "Wriothesley",      "element": "Cryo"},
-            10000086: {"name": "Neuvilette",       "element": "Hydro"},
-            10000087: {"name": "Charlotte",        "element": "Cryo"},
-            10000088: {"name": "Furina",           "element": "Hydro"},
-            10000089: {"name": "Chevreuse",        "element": "Pyro"},
-            10000090: {"name": "Navia",            "element": "Geo"},
-            10000091: {"name": "Gaming",           "element": "Pyro"},
-            10000092: {"name": "Xianyun",          "element": "Anemo"},
-            10000093: {"name": "Chiori",           "element": "Geo"},
-            10000094: {"name": "Sigewinne",        "element": "Hydro"},
-            10000095: {"name": "Arlecchino",       "element": "Pyro"},
-            10000096: {"name": "Sethos",           "element": "Electro"},
-            10000097: {"name": "Clorinde",         "element": "Electro"},
-            10000098: {"name": "Emilie",           "element": "Dendro"},
-            10000099: {"name": "Kachina",          "element": "Geo"},
-            10000100: {"name": "Kinich",           "element": "Dendro"},
-            10000101: {"name": "Mualani",          "element": "Hydro"},
-            10000102: {"name": "Xilonen",          "element": "Geo"},
-            10000103: {"name": "Chasca",           "element": "Anemo"},
-            10000104: {"name": "Ororon",           "element": "Electro"},
-            10000105: {"name": "Citlali",          "element": "Cryo"},
-            10000106: {"name": "Mizuki",           "element": "Anemo"},
-            10000107: {"name": "Varesa",           "element": "Electro"},
-            10000108: {"name": "Mavuika",          "element": "Pyro"},
-            10000110: {"name": "Lan Yan",          "element": "Anemo"},
-            # IDs beyond 10000110 are for characters released after version 5.3.
-            # These are populated at runtime from the jmsszkzlz API and Enka
-            # characters.json, both of which are auto-fetched on startup.
+            10000002: {"name": "Kamisato Ayaka",      "element": "Cryo"},
+            10000003: {"name": "Jean",                "element": "Anemo"},
+            10000005: {"name": "Traveler",            "element": "Anemo"},
+            10000006: {"name": "Lisa",                "element": "Electro"},
+            10000007: {"name": "Traveler",            "element": "Anemo"},
+            10000014: {"name": "Barbara",             "element": "Hydro"},
+            10000015: {"name": "Kaeya",               "element": "Cryo"},
+            10000016: {"name": "Diluc",               "element": "Pyro"},
+            10000020: {"name": "Razor",               "element": "Electro"},
+            10000021: {"name": "Amber",               "element": "Pyro"},
+            10000022: {"name": "Venti",               "element": "Anemo"},
+            10000023: {"name": "Xiangling",           "element": "Pyro"},
+            10000024: {"name": "Beidou",              "element": "Electro"},
+            10000025: {"name": "Xingqiu",             "element": "Hydro"},
+            10000026: {"name": "Xiao",                "element": "Anemo"},
+            10000027: {"name": "Ningguang",           "element": "Geo"},
+            10000029: {"name": "Klee",                "element": "Pyro"},
+            10000030: {"name": "Zhongli",             "element": "Geo"},
+            10000031: {"name": "Fischl",              "element": "Electro"},
+            10000032: {"name": "Bennett",             "element": "Pyro"},
+            10000033: {"name": "Tartaglia",           "element": "Hydro"},
+            10000034: {"name": "Noelle",              "element": "Geo"},
+            10000035: {"name": "Qiqi",                "element": "Cryo"},
+            10000036: {"name": "Chongyun",            "element": "Cryo"},
+            10000037: {"name": "Ganyu",               "element": "Cryo"},
+            10000038: {"name": "Albedo",              "element": "Geo"},
+            10000039: {"name": "Diona",               "element": "Cryo"},
+            10000041: {"name": "Mona",                "element": "Hydro"},
+            10000042: {"name": "Keqing",              "element": "Electro"},
+            10000043: {"name": "Sucrose",             "element": "Anemo"},
+            10000044: {"name": "Xinyan",              "element": "Pyro"},
+            10000045: {"name": "Rosaria",             "element": "Cryo"},
+            10000046: {"name": "Hu Tao",              "element": "Pyro"},
+            10000047: {"name": "Kaedehara Kazuha",    "element": "Anemo"},
+            10000048: {"name": "Yanfei",              "element": "Pyro"},
+            10000049: {"name": "Yoimiya",             "element": "Pyro"},
+            10000050: {"name": "Thoma",               "element": "Pyro"},
+            10000051: {"name": "Eula",                "element": "Cryo"},
+            10000052: {"name": "Raiden Shogun",       "element": "Electro"},
+            10000053: {"name": "Sayu",                "element": "Anemo"},
+            10000054: {"name": "Sangonomiya Kokomi",  "element": "Hydro"},
+            10000055: {"name": "Gorou",               "element": "Geo"},
+            10000056: {"name": "Kujou Sara",          "element": "Electro"},
+            10000057: {"name": "Arataki Itto",        "element": "Geo"},
+            10000058: {"name": "Yae Miko",            "element": "Electro"},
+            10000059: {"name": "Shikanoin Heizou",    "element": "Anemo"},
+            10000060: {"name": "Yelan",               "element": "Hydro"},
+            10000061: {"name": "Kirara",              "element": "Dendro"},
+            10000062: {"name": "Aloy",                "element": "Cryo"},
+            10000063: {"name": "Shenhe",              "element": "Cryo"},
+            10000064: {"name": "Yun Jin",             "element": "Geo"},
+            10000065: {"name": "Kuki Shinobu",        "element": "Electro"},
+            10000066: {"name": "Kamisato Ayato",      "element": "Hydro"},
+            10000067: {"name": "Collei",              "element": "Dendro"},
+            10000068: {"name": "Dori",                "element": "Electro"},
+            10000069: {"name": "Tighnari",            "element": "Dendro"},
+            10000070: {"name": "Nilou",               "element": "Hydro"},
+            10000071: {"name": "Cyno",                "element": "Electro"},
+            10000072: {"name": "Candace",             "element": "Hydro"},
+            10000073: {"name": "Nahida",              "element": "Dendro"},
+            10000074: {"name": "Layla",               "element": "Cryo"},
+            10000075: {"name": "Wanderer",            "element": "Anemo"},
+            10000076: {"name": "Faruzan",             "element": "Anemo"},
+            10000077: {"name": "Yaoyao",              "element": "Dendro"},
+            10000078: {"name": "Alhaitham",           "element": "Dendro"},
+            10000079: {"name": "Dehya",               "element": "Pyro"},
+            10000080: {"name": "Mika",                "element": "Cryo"},
+            10000081: {"name": "Kaveh",               "element": "Dendro"},
+            10000082: {"name": "Baizhu",              "element": "Dendro"},
+            10000083: {"name": "Lynette",             "element": "Anemo"},
+            10000084: {"name": "Lyney",               "element": "Pyro"},
+            10000085: {"name": "Freminet",            "element": "Cryo"},
+            10000086: {"name": "Wriothesley",         "element": "Cryo"},
+            10000087: {"name": "Neuvillette",         "element": "Hydro"},
+            10000088: {"name": "Charlotte",           "element": "Cryo"},
+            10000089: {"name": "Furina",              "element": "Hydro"},
+            10000090: {"name": "Chevreuse",           "element": "Pyro"},
+            10000091: {"name": "Navia",               "element": "Geo"},
+            10000092: {"name": "Gaming",              "element": "Pyro"},
+            10000093: {"name": "Xianyun",             "element": "Anemo"},
+            10000094: {"name": "Chiori",              "element": "Geo"},
+            10000095: {"name": "Sigewinne",           "element": "Hydro"},
+            10000096: {"name": "Arlecchino",          "element": "Pyro"},
+            10000097: {"name": "Sethos",              "element": "Electro"},
+            10000098: {"name": "Clorinde",            "element": "Electro"},
+            10000099: {"name": "Emilie",              "element": "Dendro"},
+            10000100: {"name": "Kachina",             "element": "Geo"},
+            10000101: {"name": "Kinich",              "element": "Dendro"},
+            10000102: {"name": "Mualani",             "element": "Hydro"},
+            10000103: {"name": "Xilonen",             "element": "Geo"},
+            10000104: {"name": "Chasca",              "element": "Anemo"},
+            10000105: {"name": "Ororon",              "element": "Electro"},
+            10000106: {"name": "Mavuika",             "element": "Pyro"},
+            10000107: {"name": "Citlali",             "element": "Cryo"},
+            10000108: {"name": "Lan Yan",             "element": "Anemo"},
+            10000109: {"name": "Yumemizuki Mizuki",   "element": "Anemo"},
+            10000110: {"name": "Iansan",              "element": "Electro"},
+            10000111: {"name": "Varesa",              "element": "Electro"},
+            10000112: {"name": "Escoffier",           "element": "Cryo"},
+            10000113: {"name": "Ifa",                 "element": "Anemo"},
+            10000114: {"name": "Skirk",               "element": "Cryo"},
+            10000115: {"name": "Dahlia",              "element": "Hydro"},
+            10000116: {"name": "Ineffa",              "element": "Electro"},
+            10000119: {"name": "Lauma",               "element": "Dendro"},
+            10000120: {"name": "Flins",               "element": "Electro"},
+            10000121: {"name": "Aino",                "element": "Hydro"},
+            10000122: {"name": "Nefer",               "element": "Dendro"},
+            10000123: {"name": "Durin",               "element": "Pyro"},
+            10000124: {"name": "Jahoda",              "element": "Anemo"},
+            # IDs beyond 10000124 are populated at runtime from Enka Network
+            # (characters.json + loc.json) and the jmsszkzlz API, both of
+            # which are auto-fetched on startup.
         }
-    
+
     async def fetch_account(self, uid: str) -> Dict[str, Any]:
         """
         Fetch player account data from Enka.Network
