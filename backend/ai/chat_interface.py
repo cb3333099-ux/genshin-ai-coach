@@ -243,20 +243,19 @@ class ChatInterface:
                 return {"response": self._get_mock_response(query), "sources_used": []}
 
             system_prompt = self._get_system_prompt()
-            context_msg = ""
-            if account_data:
-                context_msg = self._build_player_context(account_data)
 
-            # Fetch live community build data if a character is mentioned
+            # Fetch live community build data and inject into system prompt
             build_context, sources_used = await self._fetch_build_context(query)
             if build_context:
-                context_msg += f"\n\n{build_context}"
+                system_prompt += f"\n\n{build_context}"
 
-            user_message = query + context_msg
+            # Inject player account data into system prompt (not conversation history)
+            if account_data:
+                system_prompt += self._build_player_context(account_data)
 
             self.conversation_history.append({
                 "role": "user",
-                "content": user_message
+                "content": query
             })
 
             try:
@@ -468,3 +467,8 @@ class ChatInterface:
     def clear_history(self):
         """Clear conversation history"""
         self.conversation_history = []
+
+    async def close(self) -> None:
+        """Clean up resources (close underlying HTTP sessions)."""
+        if self.character_cache:
+            await self.character_cache.close()

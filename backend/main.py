@@ -417,6 +417,14 @@ async def startup_event():
     logger.info("=" * 60)
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on shutdown"""
+    logger.info("🛑 GENSHIN AI COACH - SHUTTING DOWN")
+    await chat_interface.close()
+    logger.info("✅ Resources released")
+
+
 # Mount frontend static files (CSS, JS, etc.) - must be AFTER all API routes!
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
 
