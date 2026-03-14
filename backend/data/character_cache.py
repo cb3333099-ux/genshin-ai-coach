@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _CACHE_DIR = os.path.join(tempfile.gettempdir(), "genshin_build_cache")
+# Maximum time (seconds) to wait for an in-progress fetch before giving up
+_MAX_CONCURRENT_WAIT_SECONDS = 30
 
 
 class DynamicCharacterCache:
@@ -68,7 +70,7 @@ class DynamicCharacterCache:
         # Avoid duplicate concurrent fetches for the same character
         if key in self._in_progress:
             logger.info("Fetch already in progress for %s – waiting", character_name)
-            for _ in range(30):
+            for _ in range(_MAX_CONCURRENT_WAIT_SECONDS):
                 await asyncio.sleep(1)
                 cached = self._load_cache(key)
                 if cached is not None:

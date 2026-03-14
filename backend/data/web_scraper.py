@@ -97,6 +97,12 @@ _STAT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Maximum number of HTML siblings to scan when searching for weapon
+# entries after a "weapon" heading.  Guides rarely have more than 20
+# consecutive elements in a single section, so 30 gives a comfortable
+# safety margin without scanning the entire document.
+_MAX_WEAPON_SIBLING_SCAN = 30
+
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 _HEADERS = {
@@ -276,7 +282,7 @@ class GenshinWebScraper:
                 continue
             # Collect list items and table rows after this heading
             sibling = heading.next_sibling
-            for _ in range(30):  # limit look-ahead
+            for _ in range(_MAX_WEAPON_SIBLING_SCAN):
                 if sibling is None:
                     break
                 if isinstance(sibling, Tag):
@@ -391,7 +397,9 @@ class GenshinWebScraper:
                     all_stats[slot][stat] = all_stats[slot].get(stat, 0) + 1
 
         n = len(sources)
-        consensus_threshold = max(1, n - 1)  # mentioned by at least (n-1) sources
+        # Use the same threshold as SourceAggregator: consensus when ≥2 sources
+        # agree (or 1 when there is only a single source).
+        consensus_threshold = 2 if n >= 2 else 1
 
         consensus_artifacts = [
             art for art, cnt in sorted(all_artifacts.items(), key=lambda x: -x[1])

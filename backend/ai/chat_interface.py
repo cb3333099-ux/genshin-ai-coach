@@ -118,7 +118,7 @@ _KNOWN_CHARACTERS: list[str] = [
     "Keqing", "Kirara", "Klee", "Kujou Sara", "Sara", "Kuki Shinobu",
     "Shinobu", "Layla", "Lisa", "Lumine", "Lynette", "Lyney", "Mavuika",
     "Mika", "Mona", "Mualani", "Nahida", "Navia", "Neuvillette", "Nilou",
-    "Ningguang", "Noelle", "Nxde", "Ororon", "Qiqi", "Raiden Shogun",
+    "Ningguang", "Noelle", "Ororon", "Qiqi", "Raiden Shogun",
     "Raiden", "Razor", "Rosaria", "Sangonomiya Kokomi", "Kokomi", "Sayu",
     "Sethos", "Shenhe", "Shikanoin Heizou", "Heizou", "Sigewinne",
     "Sucrose", "Tartaglia", "Childe", "Thoma", "Tighnari", "Venti",
