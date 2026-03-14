@@ -4,6 +4,123 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level constants and helpers
+# ---------------------------------------------------------------------------
+
+INTELLIGENT_SYSTEM_PROMPT = """
+You are a professional Genshin Impact coach with expertise in character builds, artifact optimization, and resin management.
+
+YOUR COACHING ROLE:
+- Analyze the player's actual characters, artifacts, and equipment
+- Identify build strengths and weaknesses with specific numbers
+- Recommend optimal farming priorities based on THEIR roster
+- Calculate personalized resin usage strategy
+- Suggest team compositions from their existing characters
+- Give character-specific, actionable advice (NEVER generic)
+
+CRITICAL RULES FOR RESPONSES:
+1. ALWAYS base recommendations on player data provided
+2. ONLY recommend Original Resin farming (artifacts, talents, materials)
+3. NEVER mention Spiral Abyss resin usage - it doesn't exist!
+4. Be SPECIFIC: use character names, domain names, artifact set names
+5. Include quality scores and specific stat recommendations
+6. Estimate farming timelines based on domain drops
+7. Prioritize fixing weakest builds first
+
+RESPONSE FORMAT:
+- Current Status (what's good, what needs work)
+- Top 3 Farming Priorities (specific domains with reasons)
+- Daily Resin Allocation (% split)
+- Weekly Schedule (when to farm what)
+- Time to Completion (estimated days/weeks)
+- Alternative options (if applicable)
+
+If no player data provided, ask for UID to give personalized advice.
+"""
+
+_DEFAULT_FARMING_TIME = "2-3 weeks"
+
+_DOMAIN_MAPPING = {
+    "Crimson Witch of Flames": {"location": "Mondstadt"},
+    "Viridescent Venerer": {"location": "Mondstadt"},
+    "Heart of Depth": {"location": "Mondstadt (Dragonspine)"},
+    "Blizzard Strayer": {"location": "Mondstadt"},
+    "Emblem of Severed Fate": {"location": "Inazuma"},
+    "Deepwood Memories": {"location": "Sumeru"},
+    "Husk of Opulent Dreams": {"location": "Inazuma"},
+    "Gilded Dreams": {"location": "Sumeru"},
+    "Ocean-Hued Clam": {"location": "Inazuma"},
+    "Echoes of an Offering": {"location": "Inazuma"},
+    "Vermillion Hereafter": {"location": "Inazuma"},
+    "Flower of Paradise Lost": {"location": "Sumeru"},
+    "Desert Pavilion Chronicle": {"location": "Sumeru"},
+    "Noblesse Oblige": {"location": "Mondstadt"},
+    "Thundering Fury": {"location": "Mondstadt"},
+    "Lavawalker": {"location": "Mondstadt"},
+    "Maiden Beloved": {"location": "Mondstadt"},
+    "Pale Flame": {"location": "Mondstadt (Dragonspine)"},
+    "Bloodstained Chivalry": {"location": "Mondstadt"},
+    "Archaic Petra": {"location": "Liyue"},
+    "Retracing Bolide": {"location": "Liyue"},
+    "Tenacity of the Millelith": {"location": "Liyue"},
+    "Shimenawa's Reminiscence": {"location": "Inazuma"},
+}
+
+_ELEMENT_DOMAINS = {
+    "Pyro": "Crimson Witch of Flames",
+    "Hydro": "Heart of Depth",
+    "Cryo": "Blizzard Strayer",
+    "Anemo": "Viridescent Venerer",
+    "Electro": "Emblem of Severed Fate",
+    "Dendro": "Deepwood Memories",
+    "Geo": "Husk of Opulent Dreams",
+}
+
+
+def calculate_farming_priorities(weak_builds: list, char_db: dict = None) -> list:
+    """Calculate top farming domains based on weak builds, sorted by priority."""
+    priorities = []
+    for build in weak_builds:
+        set_name = build.get("set", "Unknown")
+        # If set is unknown/empty, fall back to element-based recommendation
+        if not set_name or set_name == "Unknown":
+            element = build.get("element", "")
+            set_name = _ELEMENT_DOMAINS.get(element, "Unknown")
+        domain_info = _DOMAIN_MAPPING.get(set_name, {})
+        priorities.append({
+            "character": build["character"],
+            "set": set_name,
+            "quality": build["quality"],
+            "location": domain_info.get("location", "Unknown"),
+            "farming_time": _DEFAULT_FARMING_TIME,
+            "priority_score": 10 - build["quality"],
+        })
+    return sorted(priorities, key=lambda x: x["priority_score"], reverse=True)
+
+
+def get_resin_allocation(weak_builds: list, total_resin: int = 180) -> str:
+    """Calculate and format optimal daily resin allocation."""
+    if not weak_builds:
+        return "All your builds are optimal! Consider farming for backup artifacts."
+
+    primary_pct = 60
+    secondary_pct = 20
+    weekly_pct = 20
+
+    primary_resin = int(total_resin * primary_pct / 100)
+    secondary_resin = int(total_resin * secondary_pct / 100)
+    weekly_resin = int(total_resin * weekly_pct / 100)
+
+    return (
+        f"Daily Resin Allocation ({total_resin} resin/day):\n"
+        f"- {primary_pct}% ({primary_resin} resin) → Priority domain\n"
+        f"- {secondary_pct}% ({secondary_resin} resin) → Secondary domain\n"
+        f"- {weekly_pct}% ({weekly_resin} resin) → Weekly bosses (3x/week)\n\n"
+        "Recommended: Use Condensed Resin (4 runs = 160 resin total)"
+    )
+
+
 class ChatInterface:
     """AI Chat interface for Genshin Impact recommendations"""
 
@@ -89,11 +206,6 @@ class ChatInterface:
         lines.append(f"Adventure Rank: {account_data.get('level', 'Unknown')}")
         lines.append(f"World Level: {account_data.get('world_level', 'Unknown')}")
 
-        abyss_floor = account_data.get("abyss_floor", 0)
-        abyss_chamber = account_data.get("abyss_chamber", 0)
-        if abyss_floor:
-            lines.append(f"Spiral Abyss Progress: Floor {abyss_floor}-{abyss_chamber}")
-
         achievements = account_data.get("achievement_count", 0)
         if achievements:
             lines.append(f"Achievements: {achievements}")
@@ -103,6 +215,8 @@ class ChatInterface:
             lines.append(f"Signature: {sig}")
 
         characters = account_data.get("characters", [])
+        weak_builds = []
+
         if characters:
             lines.append(f"\nShowcased Characters ({len(characters)} total):")
             for char in characters:
@@ -153,7 +267,13 @@ class ChatInterface:
                     grade = build_analysis.get("grade", "")
                     set_summary = build_analysis.get("set_summary", "")
                     role = build_analysis.get("role", "")
-                    lines.append(f"    Build Quality: {score}/10 ({grade}) | Role: {role}")
+                    if score >= 8.5:
+                        status = "✅ Optimal"
+                    elif score >= 7:
+                        status = "⚠️ Needs upgrade"
+                    else:
+                        status = "🔴 Poor"
+                    lines.append(f"    Build Quality: {score}/10 ({grade}) {status} | Role: {role}")
                     if set_summary:
                         lines.append(f"    Artifact Set: {set_summary}")
                     main_stats = build_analysis.get("main_stats", {})
@@ -164,9 +284,30 @@ class ChatInterface:
                     if recs:
                         lines.append(f"    Build Tips: {recs[0]}")
 
+                    # Track weak builds for priority calculation
+                    if score < 8:
+                        weak_builds.append({
+                            "character": name,
+                            "element": element,
+                            "quality": score,
+                            "set": set_summary or "",
+                        })
+
+        # Farming priorities using module-level helper
+        priorities = calculate_farming_priorities(weak_builds)
         lines.append("\nFARMING PRIORITIES:")
-        priorities = self._calculate_farming_priorities(account_data)
-        lines.append(self._format_priorities(priorities))
+        if priorities:
+            for i, p in enumerate(priorities[:3], 1):
+                lines.append(
+                    f"{i}. {p['character']} needs {p['set']}"
+                    f" (Current: {p['quality']}/10 | {p['location']} | Est. {p['farming_time']})"
+                )
+        else:
+            lines.append("No urgent farming priorities identified.")
+
+        # Resin allocation using module-level helper
+        lines.append("\nRESIN ALLOCATION:")
+        lines.append(get_resin_allocation(weak_builds))
 
         lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression.")
         lines.append("Remember: Base your recommendations on their actual character data, not generic advice.")
@@ -175,74 +316,7 @@ class ChatInterface:
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI coach"""
-        return """You are a professional Genshin Impact coach. You have access to detailed player data.
-
-YOUR ROLE:
-- Analyze player's actual characters, artifacts, weapons
-- Identify build strengths and weaknesses
-- Recommend specific farming priorities
-- Calculate optimal resin usage strategy
-- Suggest team compositions based on their roster
-- Give personalized, character-specific advice (NOT generic)
-
-RESIN STRATEGY RULES:
-- Focus on ORIGINAL resin only (not Abyss!)
-- Analyze player's TOP 3 weak builds first
-- Recommend specific domains by name
-- Include condensed resin strategies
-- Give weekly farming schedule based on their needs
-- Estimate time to optimal builds
-
-OUTPUT FORMAT:
-1. Current Status Analysis
-2. Top 3 Farming Priorities (specific domains)
-3. Daily Resin Split (% allocation)
-4. Weekly Schedule
-5. Time to Completion Estimate
-6. Team Composition Suggestions (based on their roster)"""
-
-    def _calculate_farming_priorities(self, player_data: dict) -> list:
-        """Identify top 3 characters/domains to farm based on weakest builds"""
-        priorities = []
-
-        element_domains = {
-            "Pyro": "Crimson Witch of Flames (Mondstadt)",
-            "Hydro": "Heart of Depth (Dragonspine, Mondstadt)",
-            "Cryo": "Blizzard Strayer (Mondstadt)",
-            "Anemo": "Viridescent Venerer (Mondstadt)",
-            "Electro": "Emblem of Severed Fate (Inazuma)",
-            "Dendro": "Deepwood Memories (Sumeru)",
-            "Geo": "Husk of Opulent Dreams (Inazuma)",
-        }
-
-        for char in player_data.get("characters", []):
-            build_analysis = char.get("build_analysis") or {}
-            quality_score = build_analysis.get("total_score", 0)
-            element = char.get("element", "")
-            name = char.get("name", "Unknown")
-
-            if quality_score < 7:
-                domain = element_domains.get(element, "Unknown Domain")
-                priorities.append({
-                    "character": name,
-                    "quality": quality_score,
-                    "domain": domain,
-                    "reason": "Needs artifact upgrades",
-                })
-
-        return sorted(priorities, key=lambda x: x["quality"])[:3]
-
-    def _format_priorities(self, priorities: list) -> str:
-        """Format farming priorities for the AI prompt"""
-        if not priorities:
-            return "No urgent farming priorities identified."
-        lines = []
-        for i, p in enumerate(priorities, 1):
-            lines.append(
-                f"{i}. {p['character']} (Build Score: {p['quality']}/10) – "
-                f"Farm {p['domain']} ({p['reason']})"
-            )
-        return "\n".join(lines)
+        return INTELLIGENT_SYSTEM_PROMPT
 
     def _get_mock_response(self, query: str) -> str:
         """Get a mock response when API is not available"""
