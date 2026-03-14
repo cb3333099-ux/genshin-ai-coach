@@ -164,35 +164,85 @@ class ChatInterface:
                     if recs:
                         lines.append(f"    Build Tips: {recs[0]}")
 
+        lines.append("\nFARMING PRIORITIES:")
+        priorities = self._calculate_farming_priorities(account_data)
+        lines.append(self._format_priorities(priorities))
+
         lines.append("\nUSE THIS DATA to give personalized advice about this player's specific characters, builds, and progression.")
+        lines.append("Remember: Base your recommendations on their actual character data, not generic advice.")
         lines.append("=== END PLAYER DATA ===")
         return "\n".join(lines)
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the AI coach"""
-        return """You are Genshin AI Coach, an expert Genshin Impact gaming assistant.
+        return """You are a professional Genshin Impact coach. You have access to detailed player data.
 
-You have deep knowledge of:
-- Character mechanics and optimal builds
-- Artifact farming strategies
-- Team compositions and elemental reactions
-- Spiral Abyss strategies
-- Resource management and progression
-- Daily farming priorities
-- Banner evaluation and pull recommendations
+YOUR ROLE:
+- Analyze player's actual characters, artifacts, weapons
+- Identify build strengths and weaknesses
+- Recommend specific farming priorities
+- Calculate optimal resin usage strategy
+- Suggest team compositions based on their roster
+- Give personalized, character-specific advice (NOT generic)
 
-Guidelines:
-1. Provide specific, actionable recommendations
-2. Explain your reasoning clearly
-3. Be encouraging and helpful
-4. Consider the player's current level and progression
-5. Suggest efficient farming routes
-6. Recommend practical team compositions
+RESIN STRATEGY RULES:
+- Focus on ORIGINAL resin only (not Abyss!)
+- Analyze player's TOP 3 weak builds first
+- Recommend specific domains by name
+- Include condensed resin strategies
+- Give weekly farming schedule based on their needs
+- Estimate time to optimal builds
 
-Always format responses clearly with:
-- Main recommendation at the top
-- Supporting details
-- Any warnings or considerations"""
+OUTPUT FORMAT:
+1. Current Status Analysis
+2. Top 3 Farming Priorities (specific domains)
+3. Daily Resin Split (% allocation)
+4. Weekly Schedule
+5. Time to Completion Estimate
+6. Team Composition Suggestions (based on their roster)"""
+
+    def _calculate_farming_priorities(self, player_data: dict) -> list:
+        """Identify top 3 characters/domains to farm based on weakest builds"""
+        priorities = []
+
+        element_domains = {
+            "Pyro": "Crimson Witch of Flames (Mondstadt)",
+            "Hydro": "Heart of Depth (Dragonspine, Mondstadt)",
+            "Cryo": "Blizzard Strayer (Mondstadt)",
+            "Anemo": "Viridescent Venerer (Mondstadt)",
+            "Electro": "Emblem of Severed Fate (Inazuma)",
+            "Dendro": "Deepwood Memories (Sumeru)",
+            "Geo": "Husk of Opulent Dreams (Inazuma)",
+        }
+
+        for char in player_data.get("characters", []):
+            build_analysis = char.get("build_analysis") or {}
+            quality_score = build_analysis.get("total_score", 0)
+            element = char.get("element", "")
+            name = char.get("name", "Unknown")
+
+            if quality_score < 7:
+                domain = element_domains.get(element, "Unknown Domain")
+                priorities.append({
+                    "character": name,
+                    "quality": quality_score,
+                    "domain": domain,
+                    "reason": "Needs artifact upgrades",
+                })
+
+        return sorted(priorities, key=lambda x: x["quality"])[:3]
+
+    def _format_priorities(self, priorities: list) -> str:
+        """Format farming priorities for the AI prompt"""
+        if not priorities:
+            return "No urgent farming priorities identified."
+        lines = []
+        for i, p in enumerate(priorities, 1):
+            lines.append(
+                f"{i}. {p['character']} (Build Score: {p['quality']}/10) – "
+                f"Farm {p['domain']} ({p['reason']})"
+            )
+        return "\n".join(lines)
 
     def _get_mock_response(self, query: str) -> str:
         """Get a mock response when API is not available"""
