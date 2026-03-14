@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from api.enka_service import EnkaService
 from ai.chat_interface import ChatInterface
+from data.character_cache import DynamicCharacterCache
 from optimizer.solver import optimize_artifacts
 from optimizer.models import Artifact, Substat, Weapon, Constraint
 import logging
@@ -50,7 +51,8 @@ app.add_middleware(
 # from os.environ regardless of how load_dotenv behaves in the environment.
 logger.info("✅ EnkaService initialized")
 enka_service = EnkaService()
-chat_interface = ChatInterface(api_key=_api_key)
+character_cache = DynamicCharacterCache()
+chat_interface = ChatInterface(api_key=_api_key, character_cache=character_cache)
 
 @app.on_event("startup")
 async def _preload_datasets():
@@ -155,12 +157,13 @@ async def chat(request: dict):
                 pass  # Continue without account data
         
         # Get AI response
-        response = await chat_interface.chat(query, account_data)
+        result = await chat_interface.chat(query, account_data)
         
         return {
             "success": True,
             "query": query,
-            "response": response,
+            "response": result["response"],
+            "sources_used": result.get("sources_used", []),
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
