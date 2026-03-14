@@ -882,6 +882,12 @@ class EnkaService:
         info = EnkaService._character_db.get(character_id) if character_id else None
         if info:
             return info.copy()
+        if character_id:
+            logger.warning(
+                f"Character ID {character_id} not found in database – "
+                "consider adding it to _builtin_character_fallback() or "
+                "ensuring the external APIs returned up-to-date data."
+            )
         return {
             "name": f"Character {character_id}" if character_id else "Unknown",
             "element": "Unknown",
