@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ CRITICAL RULES FOR RESPONSES:
 5. Include quality scores and specific stat recommendations
 6. Estimate farming timelines based on domain drops
 7. Prioritize fixing weakest builds first
+8. When community build data is provided, ALWAYS use it and CITE the sources
+9. When sources disagree, explain the options clearly
+10. NEVER invent build data that is not in the player context or community build data
 
 RESPONSE FORMAT:
 - Current Status (what's good, what needs work)
@@ -35,6 +39,7 @@ RESPONSE FORMAT:
 - Weekly Schedule (when to farm what)
 - Time to Completion (estimated days/weeks)
 - Alternative options (if applicable)
+- Sources (cite community sources when build data is included)
 
 If no player data provided, ask for UID to give personalized advice.
 """
@@ -99,6 +104,81 @@ def calculate_farming_priorities(weak_builds: list, char_db: dict = None) -> lis
     return sorted(priorities, key=lambda x: x["priority_score"], reverse=True)
 
 
+# ---------------------------------------------------------------------------
+# Known Genshin Impact character names (game metadata for query parsing)
+# ---------------------------------------------------------------------------
+
+_KNOWN_CHARACTERS: list[str] = [
+    "Albedo", "Alhaitham", "Aloy", "Amber", "Arataki Itto", "Arlecchino",
+    "Baizhu", "Barbara", "Beidou", "Bennett", "Candace", "Charlotte",
+    "Chevreuse", "Chiori", "Chongyun", "Citlali", "Chasca", "Clorinde",
+    "Collei", "Cyno", "Dehya", "Diluc", "Diona", "Dori", "Emilie",
+    "Eula", "Faruzan", "Fischl", "Freminet", "Furina", "Gaming", "Ganyu",
+    "Gorou", "Hu Tao", "Jean", "Kachina", "Kadehara Kazuha", "Kazuha",
+    "Keqing", "Kirara", "Klee", "Kujou Sara", "Sara", "Kuki Shinobu",
+    "Shinobu", "Layla", "Lisa", "Lumine", "Lynette", "Lyney", "Mavuika",
+    "Mika", "Mona", "Mualani", "Nahida", "Navia", "Neuvillette", "Nilou",
+    "Ningguang", "Noelle", "Ororon", "Qiqi", "Raiden Shogun",
+    "Raiden", "Razor", "Rosaria", "Sangonomiya Kokomi", "Kokomi", "Sayu",
+    "Sethos", "Shenhe", "Shikanoin Heizou", "Heizou", "Sigewinne",
+    "Sucrose", "Tartaglia", "Childe", "Thoma", "Tighnari", "Venti",
+    "Wanderer", "Scaramouche", "Wriothesley", "Xiangling", "Xiao",
+    "Xingqiu", "Xinyan", "Xianyun", "Yae Miko", "Yae", "Yanfei",
+    "Yaoyao", "Yelan", "Yoimiya", "Yun Jin", "Zhongli",
+]
+
+# Build a regex that matches any known character name (longest first to
+# avoid partial matches, e.g. "Sara" inside "Kujou Sara").
+_CHARACTER_PATTERN = re.compile(
+    r"\b(?:" +
+    "|".join(re.escape(c) for c in sorted(_KNOWN_CHARACTERS, key=len, reverse=True)) +
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Canonical form lookup (lowercase → proper name)
+_CHARACTER_CANONICAL: dict[str, str] = {c.lower(): c for c in _KNOWN_CHARACTERS}
+
+# Aliases / nicknames → canonical name
+_CHARACTER_ALIASES: dict[str, str] = {
+    "childe": "Tartaglia",
+    "tartaglia": "Tartaglia",
+    "scaramouche": "Wanderer",
+    "wanderer": "Wanderer",
+    "yae": "Yae Miko",
+    "kokomi": "Sangonomiya Kokomi",
+    "raiden": "Raiden Shogun",
+    "kazuha": "Kadehara Kazuha",
+    "sara": "Kujou Sara",
+    "heizou": "Shikanoin Heizou",
+    "shinobu": "Kuki Shinobu",
+    "hu tao": "Hu Tao",
+    "hutao": "Hu Tao",
+}
+
+
+def _extract_character_name(query: str) -> Optional[str]:
+    """
+    Extract the first Genshin Impact character name mentioned in *query*.
+
+    Returns the canonical character name, or None if no character is found.
+    """
+    query_lower = query.lower()
+
+    # Check aliases first (multi-word and abbreviations)
+    for alias, canonical in _CHARACTER_ALIASES.items():
+        if alias in query_lower:
+            return canonical
+
+    # Then regex match on the full character list
+    match = _CHARACTER_PATTERN.search(query)
+    if match:
+        raw = match.group(0)
+        return _CHARACTER_CANONICAL.get(raw.lower(), raw)
+
+    return None
+
+
 def get_resin_allocation(weak_builds: list, total_resin: int = 180) -> str:
     """Calculate and format optimal daily resin allocation."""
     if not weak_builds:
@@ -124,11 +204,12 @@ def get_resin_allocation(weak_builds: list, total_resin: int = 180) -> str:
 class ChatInterface:
     """AI Chat interface for Genshin Impact recommendations"""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize chat interface with Groq"""
+    def __init__(self, api_key: Optional[str] = None, character_cache=None):
+        """Initialize chat interface with Groq and optional character build cache"""
         
         # Use the api_key passed in from main.py
         self.api_key = api_key
+        self.character_cache = character_cache
 
         if not self.api_key:
             logger.warning("❌ GROQ_API_KEY not found - chat will use mock responses")
@@ -144,8 +225,14 @@ class ChatInterface:
 
         self.conversation_history = []
 
-    async def chat(self, query: str, account_data: dict = None) -> str:
-        """Process user query and return AI response"""
+    async def chat(self, query: str, account_data: dict = None) -> dict:
+        """
+        Process user query and return a dict with 'response' and 'sources_used'.
+
+        The 'sources_used' list contains the community source names whose build
+        data was injected into the AI context for this query.
+        """
+        sources_used: list[str] = []
         try:
             logger.info(f"📨 Chat request received: {query[:50]}...")
             logger.info(f"🔍 Client status: {self.client is not None}")
@@ -153,12 +240,17 @@ class ChatInterface:
             
             if not self.client:
                 logger.warning("⚠️ Using mock response - Groq client not available")
-                return self._get_mock_response(query)
+                return {"response": self._get_mock_response(query), "sources_used": []}
 
             system_prompt = self._get_system_prompt()
             context_msg = ""
             if account_data:
                 context_msg = self._build_player_context(account_data)
+
+            # Fetch live community build data if a character is mentioned
+            build_context, sources_used = await self._fetch_build_context(query)
+            if build_context:
+                context_msg += f"\n\n{build_context}"
 
             user_message = query + context_msg
 
@@ -187,17 +279,52 @@ class ChatInterface:
                 })
 
                 logger.info("✅ Groq response generated successfully")
-                return assistant_message
+                return {"response": assistant_message, "sources_used": sources_used}
                 
             except Exception as api_error:
                 logger.error(f"❌ Groq API error: {str(api_error)}")
                 logger.error(f"   Error type: {type(api_error)}")
                 logger.warning("⚠️ Falling back to mock response")
-                return self._get_mock_response(query)
+                return {"response": self._get_mock_response(query), "sources_used": []}
 
         except Exception as e:
             logger.error(f"❌ Error in chat interface: {str(e)}")
-            return self._get_mock_response(query)
+            return {"response": self._get_mock_response(query), "sources_used": []}
+
+    async def _fetch_build_context(self, query: str) -> tuple[str, list[str]]:
+        """
+        Extract a character name from the user query, then fetch live community
+        build data for that character.
+
+        Returns a tuple of (prompt_text, sources_used_list).
+        prompt_text is empty if no character is found or the cache is unavailable.
+        """
+        if not self.character_cache:
+            return "", []
+
+        character_name = _extract_character_name(query)
+        if not character_name:
+            return "", []
+
+        try:
+            build = await self.character_cache.get_character_build(character_name)
+            if not build:
+                logger.info("No build data available for %s", character_name)
+                return "", []
+
+            from data.source_aggregator import SourceAggregator
+            aggregator = SourceAggregator()
+            prompt_text = aggregator.format_for_prompt(build)
+            sources_used = build.get("sources_used", [])
+            logger.info(
+                "Injecting build context for %s from %s",
+                character_name,
+                sources_used,
+            )
+            return prompt_text, sources_used
+        except Exception as exc:
+            logger.warning("Build context fetch failed for %s: %s", character_name, exc)
+            return "", []
 
     def _build_player_context(self, account_data: dict) -> str:
         """Build rich player context string for the AI prompt"""
